@@ -1,6 +1,6 @@
+"use client";
 import { FC, useEffect, useRef, useCallback } from "react";
 
-// Updated interface to match the delivery boy structure from API
 interface DeliveryBoyInfo {
   id: number;
   user_id: number;
@@ -14,7 +14,6 @@ interface DeliveryBoyInfo {
   vehicle_registration: string[];
   verification_status: string;
   verification_remark: string | null;
-  created_at: string;
 }
 
 interface StoreLocation {
@@ -36,6 +35,28 @@ interface GoogleMapForTrackingProps {
   isLoading: boolean;
 }
 
+// Build a smooth curved SVG polyline between two Leaflet points
+function buildCurvedPolylinePoints(
+  start: [number, number],
+  end: [number, number],
+  numPoints = 50
+): [number, number][] {
+  const points: [number, number][] = [];
+  const latDiff = Math.abs(end[0] - start[0]);
+  const lngDiff = Math.abs(end[1] - start[1]);
+  const distance = Math.sqrt(latDiff * latDiff + lngDiff * lngDiff);
+  const curveHeight = distance * 0.25;
+
+  for (let i = 0; i <= numPoints; i++) {
+    const t = i / numPoints;
+    const lat = start[0] + (end[0] - start[0]) * t;
+    const lng = start[1] + (end[1] - start[1]) * t;
+    const parabolaFactor = 4 * t * (1 - t);
+    points.push([lat + curveHeight * parabolaFactor, lng]);
+  }
+  return points;
+}
+
 const GoogleMapForTracking: FC<GoogleMapForTrackingProps> = ({
   customerLocation,
   riderLocation,
@@ -45,393 +66,178 @@ const GoogleMapForTracking: FC<GoogleMapForTrackingProps> = ({
   isLoading,
 }) => {
   const mapRef = useRef<HTMLDivElement>(null);
-  const googleMapRef = useRef<google.maps.Map | null>(null);
-  const customerMarkerRef =
-    useRef<google.maps.marker.AdvancedMarkerElement | null>(null);
-  const riderMarkerRef =
-    useRef<google.maps.marker.AdvancedMarkerElement | null>(null);
-  const storeMarkersRef = useRef<google.maps.marker.AdvancedMarkerElement[]>(
-    []
-  );
-  const pathPolylinesRef = useRef<google.maps.Polyline[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const leafletMapRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const layersRef = useRef<any[]>([]);
 
-  // Function to create smooth curved path between two points
-  const createSmoothPath = useCallback(
-    (
-      start: { lat: number; lng: number },
-      end: { lat: number; lng: number }
-    ): google.maps.LatLng[] => {
-      const points: google.maps.LatLng[] = [];
-      const numPoints = 50;
+  const clearLayers = useCallback(() => {
+    layersRef.current.forEach((l) => l.remove());
+    layersRef.current = [];
+  }, []);
 
-      const latDiff = Math.abs(end.lat - start.lat);
-      const lngDiff = Math.abs(end.lng - start.lng);
-      const distance = Math.sqrt(latDiff * latDiff + lngDiff * lngDiff);
-
-      // Adjust curve based on distance
-      const curveHeight = distance * 0.25;
-
-      for (let i = 0; i <= numPoints; i++) {
-        const t = i / numPoints;
-        const lat = start.lat + (end.lat - start.lat) * t;
-        const lng = start.lng + (end.lng - start.lng) * t;
-
-        // Parabolic curve for smooth path
-        const parabolaFactor = 4 * t * (1 - t);
-        const offsetLat = curveHeight * parabolaFactor;
-
-        points.push(new google.maps.LatLng(lat + offsetLat, lng));
-      }
-
-      return points;
-    },
-    []
-  );
-
-  // Initialize map
+  // Initialise map once
   useEffect(() => {
-    if (!mapRef.current || googleMapRef.current) return;
+    if (!mapRef.current || leafletMapRef.current) return;
 
-    const initMap = async () => {
-      try {
-        const { Map } = (await google.maps.importLibrary(
-          "maps"
-        )) as google.maps.MapsLibrary;
-        const { AdvancedMarkerElement, PinElement } =
-          (await google.maps.importLibrary(
-            "marker"
-          )) as google.maps.MarkerLibrary;
+    import("leaflet").then((L) => {
+      if (!mapRef.current) return;
 
-        const map = new Map(mapRef.current!, {
-          zoom: 13,
-          center: customerLocation,
-          mapId: "DEMO_MAP_ID",
-          disableDefaultUI: false,
-          zoomControl: true,
-          mapTypeControl: false,
-          streetViewControl: false,
-          fullscreenControl: true,
-          gestureHandling: "greedy",
-        });
-
-        googleMapRef.current = map;
-
-        // Create customer marker (red)
-        const customerPin = new PinElement({
-          background: "#DC2626",
-          borderColor: "#FFFFFF",
-          glyphColor: "#FFFFFF",
-          glyph: "🏠",
-          scale: 1.2,
-        });
-
-        customerMarkerRef.current = new AdvancedMarkerElement({
-          map,
-          position: customerLocation,
-          content: customerPin.element,
-          title: "Delivery Location",
-        });
-
-        const customerInfoWindow = new google.maps.InfoWindow({
-          content: `
-            <div class="p-3 min-w-[220px]">
-              <div class="flex items-center gap-2 mb-2">
-                <div class="w-3 h-3 bg-red-500 rounded-full"></div>
-                <span class="font-semibold text-gray-800">Delivery Location</span>
-              </div>
-              <p class="text-sm text-gray-600">${customerAddress}</p>
-            </div>
-          `,
-        });
-
-        customerMarkerRef.current.addListener("click", () => {
-          customerInfoWindow.open(map, customerMarkerRef.current!);
-        });
-      } catch (error) {
-        console.error("Error initializing map:", error);
-      }
-    };
-
-    if (typeof google !== "undefined" && google.maps) {
-      initMap();
-    } else {
-      console.error(
-        "Google Maps not loaded. Make sure to include the Google Maps script."
+      const map = L.map(mapRef.current).setView(
+        [customerLocation.lat, customerLocation.lng],
+        13
       );
-    }
-  }, [customerLocation, customerAddress]);
 
-  // Update store markers
-  useEffect(() => {
-    if (!googleMapRef.current || storeLocations.length === 0) return;
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution:
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      }).addTo(map);
 
-    const updateStoreMarkers = async () => {
-      try {
-        const { AdvancedMarkerElement, PinElement } =
-          (await google.maps.importLibrary(
-            "marker"
-          )) as google.maps.MarkerLibrary;
+      leafletMapRef.current = map;
+    });
 
-        // Clear existing store markers
-        storeMarkersRef.current.forEach((marker) => {
-          marker.map = null;
-        });
-        storeMarkersRef.current = [];
-
-        // Create marker for each store
-        storeLocations.forEach((store, index) => {
-          const storePin = new PinElement({
-            background: "#3B82F6",
-            borderColor: "#FFFFFF",
-            glyphColor: "#FFFFFF",
-            glyph: `${index + 1}`,
-            scale: 1.1,
-          });
-
-          const storeMarker = new AdvancedMarkerElement({
-            map: googleMapRef.current!,
-            position: { lat: store.lat, lng: store.lng },
-            content: storePin.element,
-            title: store.name,
-          });
-
-          const storeInfoWindow = new google.maps.InfoWindow({
-            content: `
-              <div class="p-3 min-w-[220px]">
-                <div class="flex items-center gap-2 mb-2">
-                  <div class="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs font-bold">
-                    ${index + 1}
-                  </div>
-                  <span class="font-semibold text-gray-800">Store ${index + 1}</span>
-                </div>
-                <p class="text-sm font-medium text-gray-900 mb-1">${store.name}</p>
-                <p class="text-xs text-gray-600">${store.address}</p>
-                ${store.city ? `<p class="text-xs text-gray-500 mt-1">${store.city}, ${store.state || ""}</p>` : ""}
-              </div>
-            `,
-          });
-
-          storeMarker.addListener("click", () => {
-            storeInfoWindow.open(googleMapRef.current!, storeMarker);
-          });
-
-          storeMarkersRef.current.push(storeMarker);
-        });
-      } catch (error) {
-        console.error("Error updating store markers:", error);
+    return () => {
+      if (leafletMapRef.current) {
+        leafletMapRef.current.remove();
+        leafletMapRef.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    updateStoreMarkers();
-  }, [storeLocations]);
-
-  // Update rider marker and paths
+  // Re-draw markers + paths whenever locations change
   useEffect(() => {
-    if (!googleMapRef.current || !riderLocation) return;
+    if (!leafletMapRef.current) return;
 
-    const updateRiderAndPaths = async () => {
-      try {
-        const { AdvancedMarkerElement, PinElement } =
-          (await google.maps.importLibrary(
-            "marker"
-          )) as google.maps.MarkerLibrary;
+    import("leaflet").then((L) => {
+      const map = leafletMapRef.current;
+      if (!map) return;
 
-        // Remove existing rider marker
-        if (riderMarkerRef.current) {
-          riderMarkerRef.current.map = null;
-        }
+      clearLayers();
 
-        // Remove existing paths
-        pathPolylinesRef.current.forEach((polyline) => {
-          polyline.setMap(null);
+      // ── Customer marker ────────────────────────────────────────────────
+      const customerIcon = L.divIcon({
+        className: "",
+        html: `<div style="background:#DC2626;border:2px solid #fff;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 6px rgba(0,0,0,.4);">🏠</div>`,
+        iconSize: [32, 32],
+        iconAnchor: [16, 16],
+      });
+
+      const customerMarker = L.marker(
+        [customerLocation.lat, customerLocation.lng],
+        { icon: customerIcon }
+      )
+        .bindPopup(
+          `<div style="min-width:200px"><strong style="color:#DC2626">Delivery Location</strong><br/><span style="font-size:12px">${customerAddress}</span></div>`
+        )
+        .addTo(map);
+      layersRef.current.push(customerMarker);
+
+      // ── Store markers ──────────────────────────────────────────────────
+      storeLocations.forEach((store, idx) => {
+        const storeIcon = L.divIcon({
+          className: "",
+          html: `<div style="background:#3B82F6;border:2px solid #fff;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:bold;font-size:13px;box-shadow:0 2px 6px rgba(0,0,0,.4);">${idx + 1}</div>`,
+          iconSize: [30, 30],
+          iconAnchor: [15, 15],
         });
-        pathPolylinesRef.current = [];
+        const storeMarker = L.marker([store.lat, store.lng], {
+          icon: storeIcon,
+        })
+          .bindPopup(
+            `<div style="min-width:200px"><strong>Store ${idx + 1}</strong><br/>${store.name}<br/><span style="font-size:12px;color:#666">${store.address}${store.city ? `, ${store.city}` : ""}</span></div>`
+          )
+          .addTo(map);
+        layersRef.current.push(storeMarker);
+      });
 
-        // Create rider marker (green)
-        const riderPin = new PinElement({
-          background: "#10B981",
-          borderColor: "#FFFFFF",
-          glyphColor: "#FFFFFF",
-          glyph: "🏍️",
-          scale: 1.3,
-        });
-
-        riderMarkerRef.current = new AdvancedMarkerElement({
-          map: googleMapRef.current,
-          position: riderLocation,
-          content: riderPin.element,
-          title: riderInfo?.full_name || "Delivery Partner",
-        });
-
-        const riderInfoWindow = new google.maps.InfoWindow({
-          content: `
-            <div class="p-3 min-w-[220px]">
-              <div class="flex items-center gap-3 mb-2">
-                <div class="w-10 h-10 bg-linear-to-br from-green-400 to-green-600 rounded-full flex items-center justify-center text-white font-bold text-lg">
-                  ${riderInfo?.full_name?.charAt(0)?.toUpperCase() || "D"}
-                </div>
-                <div>
-                  <div class="flex items-center gap-2 mb-1">
-                    <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                    <span class="font-semibold text-gray-800">Delivery Partner</span>
-                  </div>
-                  <p class="text-sm font-medium">${riderInfo?.full_name || "On the way"}</p>
-                  ${riderInfo?.vehicle_type ? `<p class="text-xs text-gray-600 capitalize mt-0.5">${riderInfo.vehicle_type}</p>` : ""}
-                </div>
-              </div>
-            </div>
-          `,
+      // ── Rider marker + paths ───────────────────────────────────────────
+      if (riderLocation) {
+        const riderIcon = L.divIcon({
+          className: "",
+          html: `<div style="background:#10B981;border:2px solid #fff;border-radius:50%;width:34px;height:34px;display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 2px 6px rgba(0,0,0,.4);">🏍️</div>`,
+          iconSize: [34, 34],
+          iconAnchor: [17, 17],
         });
 
-        riderMarkerRef.current.addListener("click", () => {
-          riderInfoWindow.open(googleMapRef.current!, riderMarkerRef.current!);
-        });
+        const riderMarker = L.marker(
+          [riderLocation.lat, riderLocation.lng],
+          { icon: riderIcon }
+        )
+          .bindPopup(
+            `<div style="min-width:200px"><strong style="color:#10B981">Delivery Partner</strong><br/>${riderInfo?.full_name || "On the way"}${riderInfo?.vehicle_type ? `<br/><span style="font-size:12px;color:#666;text-transform:capitalize">${riderInfo.vehicle_type}</span>` : ""}</div>`
+          )
+          .addTo(map);
+        layersRef.current.push(riderMarker);
 
-        // Create paths based on multi-store route
         if (storeLocations.length > 0) {
-          // Path 1: From first store to rider (completed or in-progress)
-          const firstStore = storeLocations[0];
-          const pathToRider = createSmoothPath(
-            { lat: firstStore.lat, lng: firstStore.lng },
-            riderLocation
+          // Store → Rider path (green, completed leg)
+          const pathToRider = buildCurvedPolylinePoints(
+            [storeLocations[0].lat, storeLocations[0].lng],
+            [riderLocation.lat, riderLocation.lng]
           );
+          const polyToRider = L.polyline(pathToRider, {
+            color: "#10B981",
+            weight: 4,
+            opacity: 0.7,
+            dashArray: undefined,
+          }).addTo(map);
+          layersRef.current.push(polyToRider);
 
-          const polylineToRider = new google.maps.Polyline({
-            path: pathToRider,
-            geodesic: false,
-            strokeColor: "#10B981",
-            strokeOpacity: 0.7,
-            strokeWeight: 4,
-            icons: [
-              {
-                icon: {
-                  path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-                  scale: 2.5,
-                  strokeColor: "#10B981",
-                  fillColor: "#10B981",
-                  fillOpacity: 1,
-                },
-                offset: "50%",
-              },
-            ],
-          });
-          polylineToRider.setMap(googleMapRef.current);
-          pathPolylinesRef.current.push(polylineToRider);
-
-          // Path 2: From rider to customer (pending)
-          const pathToCustomer = createSmoothPath(
-            riderLocation,
-            customerLocation
+          // Rider → Customer path (indigo, pending leg)
+          const pathToCustomer = buildCurvedPolylinePoints(
+            [riderLocation.lat, riderLocation.lng],
+            [customerLocation.lat, customerLocation.lng]
           );
+          const polyToCustomer = L.polyline(pathToCustomer, {
+            color: "#6366F1",
+            weight: 3,
+            opacity: 0.6,
+            dashArray: "8 6",
+          }).addTo(map);
+          layersRef.current.push(polyToCustomer);
 
-          const polylineToCustomer = new google.maps.Polyline({
-            path: pathToCustomer,
-            geodesic: false,
-            strokeColor: "#6366F1",
-            strokeOpacity: 0.6,
-            strokeWeight: 3,
-            icons: [
-              {
-                icon: {
-                  path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-                  scale: 2,
-                  strokeColor: "#6366F1",
-                  fillColor: "#6366F1",
-                  fillOpacity: 0.7,
-                },
-                offset: "50%",
-              },
-            ],
-          });
-          polylineToCustomer.setMap(googleMapRef.current);
-          pathPolylinesRef.current.push(polylineToCustomer);
-
-          // If multiple stores, create paths between them
-          if (storeLocations.length > 1) {
-            for (let i = 0; i < storeLocations.length - 1; i++) {
-              const pathBetweenStores = createSmoothPath(
-                { lat: storeLocations[i].lat, lng: storeLocations[i].lng },
-                {
-                  lat: storeLocations[i + 1].lat,
-                  lng: storeLocations[i + 1].lng,
-                }
-              );
-
-              const polylineBetweenStores = new google.maps.Polyline({
-                path: pathBetweenStores,
-                geodesic: false,
-                strokeColor: "#3B82F6",
-                strokeOpacity: 0.5,
-                strokeWeight: 2,
-              });
-              polylineBetweenStores.setMap(googleMapRef.current);
-              pathPolylinesRef.current.push(polylineBetweenStores);
-            }
+          // Store-to-store paths if multiple stores
+          for (let i = 0; i < storeLocations.length - 1; i++) {
+            const pathBetween = buildCurvedPolylinePoints(
+              [storeLocations[i].lat, storeLocations[i].lng],
+              [storeLocations[i + 1].lat, storeLocations[i + 1].lng]
+            );
+            const polyBetween = L.polyline(pathBetween, {
+              color: "#3B82F6",
+              weight: 2,
+              opacity: 0.5,
+            }).addTo(map);
+            layersRef.current.push(polyBetween);
           }
         } else {
-          // Simple path from rider to customer if no stores
-          const pathPoints = createSmoothPath(riderLocation, customerLocation);
-          const polyline = new google.maps.Polyline({
-            path: pathPoints,
-            geodesic: false,
-            strokeColor: "#6366F1",
-            strokeOpacity: 0.8,
-            strokeWeight: 4,
-            icons: [
-              {
-                icon: {
-                  path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-                  scale: 3,
-                  strokeColor: "#6366F1",
-                  fillColor: "#6366F1",
-                  fillOpacity: 1,
-                },
-                offset: "30%",
-                repeat: "40px",
-              },
-            ],
-          });
-          polyline.setMap(googleMapRef.current);
-          pathPolylinesRef.current.push(polyline);
+          // Simple rider → customer path
+          const path = buildCurvedPolylinePoints(
+            [riderLocation.lat, riderLocation.lng],
+            [customerLocation.lat, customerLocation.lng]
+          );
+          const poly = L.polyline(path, {
+            color: "#6366F1",
+            weight: 4,
+            opacity: 0.8,
+            dashArray: "10 6",
+          }).addTo(map);
+          layersRef.current.push(poly);
         }
 
-        // Adjust map bounds to show all markers
-        const bounds = new google.maps.LatLngBounds();
-        bounds.extend(customerLocation);
-        bounds.extend(riderLocation);
-
-        storeLocations.forEach((store) => {
-          bounds.extend({ lat: store.lat, lng: store.lng });
-        });
-
-        // Add padding to bounds
-        const latDiff =
-          bounds.getNorthEast().lat() - bounds.getSouthWest().lat();
-        const lngDiff =
-          bounds.getNorthEast().lng() - bounds.getSouthWest().lng();
-        const padding = Math.max(latDiff, lngDiff) * 0.2;
-
-        const ne = bounds.getNorthEast();
-        const sw = bounds.getSouthWest();
-        bounds.extend({ lat: ne.lat() + padding, lng: ne.lng() + padding });
-        bounds.extend({ lat: sw.lat() - padding, lng: sw.lng() - padding });
-
-        if (googleMapRef.current) {
-          googleMapRef.current.fitBounds(bounds, 50);
-        }
-      } catch (error) {
-        console.error("Error updating rider and paths:", error);
+        // Fit all markers in view
+        const bounds = L.latLngBounds([
+          [customerLocation.lat, customerLocation.lng],
+          [riderLocation.lat, riderLocation.lng],
+          ...storeLocations.map((s) => [s.lat, s.lng] as [number, number]),
+        ]);
+        map.fitBounds(bounds, { padding: [40, 40] });
+      } else {
+        map.setView([customerLocation.lat, customerLocation.lng], 13);
       }
-    };
-
-    updateRiderAndPaths();
-  }, [
-    riderLocation,
-    customerLocation,
-    riderInfo,
-    storeLocations,
-    createSmoothPath,
-  ]);
+    });
+  }, [customerLocation, riderLocation, storeLocations, riderInfo, customerAddress, clearLayers]);
 
   return (
     <div className="relative w-full h-full">
@@ -439,7 +245,7 @@ const GoogleMapForTracking: FC<GoogleMapForTrackingProps> = ({
       {isLoading && (
         <div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center rounded-lg">
           <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-lg flex items-center gap-3">
-            <div className="animate-spin w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full"></div>
+            <div className="animate-spin w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full" />
             <span className="text-sm font-medium text-gray-900 dark:text-white">
               Updating location...
             </span>
