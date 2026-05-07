@@ -3,11 +3,18 @@ import type { GoogleMapProps } from "./types/GoogleMap.types";
 import { useTheme } from "next-themes";
 import StoreMarkerPopup from "./StoreMarkerPopup";
 import { Store } from "@/types/ApiResponse";
-import { useRouter } from "next/router";
+import { TILE_LAYERS, staticLat, staticLng } from "@/config/constants";
+import type {
+  Map as LeafletMap,
+  Marker as LeafletMarker,
+  Layer,
+  TileLayer,
+  LeafletMouseEvent,
+} from "leaflet";
 
-// Threshold in degrees (~5m) – if store and current location are this close, treat as same
+import "leaflet/dist/leaflet.css";
+
 const SAME_LOCATION_THRESHOLD = 0.00005;
-// Offset in degrees (~15m) – move store marker slightly so both markers are visible
 const STORE_MARKER_OFFSET = 0.00015;
 
 function isSameLocation(
@@ -35,6 +42,26 @@ function getStoreMarkerPosition(
   return { lat: storeLat, lng: storeLng };
 }
 
+function createUserIcon(L: typeof import("leaflet")) {
+  return L.divIcon({
+    className: "google-map-user-marker",
+    html: `<div style="width:22px;height:22px;background:#ef4444;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,.35)"></div>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+  });
+}
+
+function createStoreIcon(L: typeof import("leaflet")) {
+  return L.divIcon({
+    className: "store-marker-leaflet",
+    html: `<div style="width:48px;height:48px;display:flex;align-items:center;justify-content:center;cursor:pointer">
+      <img src="/logos/store-icon.png" alt="" style="width:100%;height:100%;object-fit:contain" />
+    </div>`,
+    iconSize: [48, 48],
+    iconAnchor: [24, 48],
+  });
+}
+
 function GoogleMap(props: GoogleMapProps) {
   const {
     latLng,
@@ -47,279 +74,242 @@ function GoogleMap(props: GoogleMapProps) {
     onMapLoad,
     disableRedirect,
   } = props;
+
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstance = useRef<any>(null);
-  const markerInstance = useRef<any>(null);
-  const storeMarkersRef = useRef<any[]>([]);
-  const zoneShapesRef = useRef<any[]>([]);
-  const boundsListener = useRef<any>(null);
-  const isDragging = useRef<boolean>(false);
-  const markerLibraryRef = useRef<any>(null);
+  const mapInstanceRef = useRef<LeafletMap | null>(null);
+  const tileLayerRef = useRef<TileLayer | null>(null);
+  const markerRef = useRef<LeafletMarker | null>(null);
+  const storeMarkersRef = useRef<LeafletMarker[]>([]);
+  const zoneLayersRef = useRef<Layer[]>([]);
+  const LRef = useRef<typeof import("leaflet") | null>(null);
+  const storeIconRef = useRef<ReturnType<typeof createStoreIcon> | null>(null);
+  const userIconRef = useRef<ReturnType<typeof createUserIcon> | null>(null);
+
+  const isDragging = useRef(false);
+  const isMarkerClickRef = useRef(false);
+  const isPopupOpenRef = useRef(false);
+  const prevLatLngKeyRef = useRef("");
   const storesIdsRef = useRef<Set<number>>(new Set());
-  const prevLatLngKeyRef = useRef<string>("");
   const storeDataMapRef = useRef<Map<number, Store>>(new Map());
   const callbacksRef = useRef({ onBoundsChange, onZoomChange, onLocationUpdate, onMapLoad });
-
-  useEffect(() => {
-    callbacksRef.current = { onBoundsChange, onZoomChange, onLocationUpdate, onMapLoad };
-  }, [onBoundsChange, onZoomChange, onLocationUpdate, onMapLoad]);
-  const isMarkerClickRef = useRef<boolean>(false);
-  const isPopupOpenRef = useRef<boolean>(false);
-  const prevLatLngPropRef = useRef<{lat: number; lng: number} | null>(null);
+  const prevLatLngPropRef = useRef<{ lat: number; lng: number } | null>(null);
 
   const [hoveredStore, _setHoveredStore] = useState<Store | null>(null);
-  const [map, setMap] = useState<any>(null);
+  const [mapReady, setMapReady] = useState(false);
 
-  // Helper to keep ref in sync with state
   const setHoveredStore = (store: Store | null) => {
     isPopupOpenRef.current = !!store;
     _setHoveredStore(store);
   };
+
   const [popupPosition, setPopupPosition] = useState<{ x: number; y: number }>({
     x: 0,
     y: 0,
   });
 
   const theme = useTheme();
-  const router = useRouter();
+
+  useEffect(() => {
+    callbacksRef.current = { onBoundsChange, onZoomChange, onLocationUpdate, onMapLoad };
+  }, [onBoundsChange, onZoomChange, onLocationUpdate, onMapLoad]);
 
   useEffect(() => {
     if (!mapRef.current) return;
 
-    async function initMap() {
-      try {
-        // Load Maps and Marker libraries
-        const { Map } = (await window.google.maps.importLibrary(
-          "maps",
-        )) as google.maps.MapsLibrary;
-        const markerLib = (await window.google.maps.importLibrary(
-          "marker",
-        )) as google.maps.MarkerLibrary;
-        markerLibraryRef.current = markerLib;
+    let destroyed = false;
 
-        const { AdvancedMarkerElement } = markerLib;
+    (async () => {
+      const L = (await import("leaflet")).default;
+      if (destroyed || !mapRef.current) return;
 
-        const { ColorScheme } = (await window.google.maps.importLibrary(
-          "core",
-        )) as google.maps.CoreLibrary;
+      LRef.current = L;
+      storeIconRef.current = createStoreIcon(L);
+      userIconRef.current = createUserIcon(L);
 
-        // Initialize the map
-        if (!mapInstance.current) {
-          const newMap = new Map(mapRef.current!, {
-            center: latLng || { lat: 0, lng: 0 },
-            zoom: 16,
-            mapId: "123456",
-            streetViewControl: false,
-            gestureHandling: "greedy",
-            colorScheme:
-              theme.theme == "light" ? ColorScheme.LIGHT : ColorScheme.DARK,
-          });
-          mapInstance.current = newMap;
-          setMap(newMap);
-          if (callbacksRef.current.onMapLoad) callbacksRef.current.onMapLoad();
+      const lightTiles = TILE_LAYERS[4] ?? TILE_LAYERS[0];
+      const darkTiles = TILE_LAYERS[5] ?? TILE_LAYERS[4] ?? TILE_LAYERS[0];
+      const tileUrl =
+        theme.resolvedTheme === "dark" ? darkTiles : lightTiles;
 
-          // Add click listener to the map
-          mapInstance.current.addListener(
-            "click",
-            (e: google.maps.MapMouseEvent) => {
-              // Priority 1: If we clicked on a store marker, don't move the red marker
-              // and don't close the popup (the marker's own click listener handles opening)
-              if (isMarkerClickRef.current) {
-                isMarkerClickRef.current = false;
-                return;
-              }
+      const startCenter = latLng
+        ? ([latLng.lat, latLng.lng] as [number, number])
+        : ([staticLat, staticLng] as [number, number]);
 
-              // Priority 2: If the popup is already open, just close it and don't move the red marker
-              // This addresses the requirement: "when close then if i click somewhere on map then red marker... should not call"
-              if (isPopupOpenRef.current) {
-                setHoveredStore(null);
-                return;
-              }
+      const map = L.map(mapRef.current, {
+        center: startCenter,
+        zoom: latLng ? 16 : 12,
+        zoomControl: true,
+        attributionControl: true,
+      });
 
-              // Priority 3: Otherwise, move the red marker to the clicked location
-              if (e.latLng && !isDragging.current) {
-                const newPosition = {
-                  lat: e.latLng.lat(),
-                  lng: e.latLng.lng(),
-                };
+      const tiles = L.tileLayer(tileUrl, {
+        maxZoom: 19,
+        attribution:
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      }).addTo(map);
 
-                // Update marker position
-                if (markerInstance.current) {
-                  markerInstance.current.position = newPosition;
-                } else {
-                  // Create marker if it doesn't exist
-                  markerInstance.current = new AdvancedMarkerElement({
-                    map: mapInstance.current,
-                    position: newPosition,
-                    gmpDraggable: true,
-                    title: "Selected Location",
-                  });
+      tileLayerRef.current = tiles;
+      mapInstanceRef.current = map;
 
-                  // Add drag listeners to the marker
-                  setupMarkerDragListeners(markerInstance.current);
-                }
+      map.whenReady(() => {
+        setTimeout(() => map.invalidateSize(), 100);
+        if (callbacksRef.current.onMapLoad) callbacksRef.current.onMapLoad();
+        setMapReady(true);
+      });
 
-                // Notify parent component about the location change
-                if (callbacksRef.current.onLocationUpdate) {
-                  callbacksRef.current.onLocationUpdate(newPosition);
-                }
-              }
-            },
-          );
-
-          // Close popup when map is moved or zoomed
-          mapInstance.current.addListener("dragstart", () => {
-            setHoveredStore(null);
-          });
-
-          mapInstance.current.addListener("zoom_changed", () => {
-            setHoveredStore(null);
-          });
+      const emitBounds = () => {
+        const b = map.getBounds();
+        if (!b || !callbacksRef.current.onBoundsChange) return;
+        const ne = b.getNorthEast();
+        const sw = b.getSouthWest();
+        callbacksRef.current.onBoundsChange({
+          ne: { lat: ne.lat, lng: ne.lng },
+          sw: { lat: sw.lat, lng: sw.lng },
+        });
+        if (callbacksRef.current.onZoomChange) {
+          const z = map.getZoom();
+          if (z !== undefined) callbacksRef.current.onZoomChange(z);
         }
+      };
 
-        // Add or update the marker
-        if (latLng) {
-          // Check if latLng actually changed (beyond tiny float differences) to prevent unwanted snap-backs
-          const latLngChanged = 
-            !prevLatLngPropRef.current ||
-            Math.abs(prevLatLngPropRef.current.lat - latLng.lat) > 0.00001 ||
-            Math.abs(prevLatLngPropRef.current.lng - latLng.lng) > 0.00001;
+      map.on("moveend", emitBounds);
+      map.on("zoomend", emitBounds);
 
-          if (!markerInstance.current) {
-            markerInstance.current = new AdvancedMarkerElement({
-              map: mapInstance.current,
-              position: latLng,
-              gmpDraggable: true,
-              title: "Selected Location",
-            });
+      map.on("movestart", () => setHoveredStore(null));
+      map.on("zoomstart", () => setHoveredStore(null));
 
-            // Add drag listeners to the marker
-            setupMarkerDragListeners(markerInstance.current);
-            
-            // Pan to newly created marker
-            mapInstance.current?.panTo(latLng);
-          } else {
-            // Only update marker position if not currently dragging
-            if (!isDragging.current && latLngChanged) {
-              markerInstance.current.position = latLng;
-            }
-          }
-
-          // Only pan if the user updated the latLng value explicitly!
-          if (latLngChanged && mapInstance.current && !isDragging.current) {
-            const currentCenter = mapInstance.current.getCenter();
-            if (currentCenter) {
-              const currentLat = currentCenter.lat();
-              const currentLng = currentCenter.lng();
-
-              // Use a small threshold to avoid panning if we are already close enough
-              const distanceToCenter =
-                Math.abs(currentLat - latLng.lat) > 0.0001 ||
-                Math.abs(currentLng - latLng.lng) > 0.0001;
-
-              if (distanceToCenter) {
-                mapInstance.current.panTo(latLng);
-              }
-            }
-          }
-          
-          prevLatLngPropRef.current = latLng;
+      map.on("click", (e: LeafletMouseEvent) => {
+        if (isMarkerClickRef.current) {
+          isMarkerClickRef.current = false;
+          return;
         }
-
-        // Setup bounds change listener
-        if (mapInstance.current) {
-          if (boundsListener.current) {
-            boundsListener.current.remove();
-          }
-
-          boundsListener.current = mapInstance.current.addListener(
-            "idle",
-            () => {
-              // Handle Bounds
-              if (callbacksRef.current.onBoundsChange) {
-                const bounds = mapInstance.current?.getBounds();
-                if (bounds) {
-                  const ne = bounds.getNorthEast();
-                  const sw = bounds.getSouthWest();
-
-                  const boundsData = {
-                    ne: { lat: ne.lat(), lng: ne.lng() },
-                    sw: { lat: sw.lat(), lng: sw.lng() },
-                  };
-                  callbacksRef.current.onBoundsChange(boundsData);
-                }
-              }
-
-              // Handle Zoom
-              if (callbacksRef.current.onZoomChange) {
-                const zoom = mapInstance.current?.getZoom();
-                if (zoom !== undefined) {
-                  callbacksRef.current.onZoomChange(zoom);
-                }
-              }
-            },
-          );
+        if (isPopupOpenRef.current) {
+          setHoveredStore(null);
+          return;
         }
-      } catch (error) {
-        console.error("Error initializing Google Maps:", error);
-      }
-    }
+        if (isDragging.current) return;
 
-    // Helper function to setup drag listeners on marker
-    function setupMarkerDragListeners(
-      marker: google.maps.marker.AdvancedMarkerElement,
-    ) {
-      // Wait for marker to be fully initialized
-      setTimeout(() => {
-        if (marker.element) {
-          // Drag start listener
-          marker.addListener("dragstart", () => {
+        const { lat, lng } = e.latlng;
+        const pos = { lat, lng };
+
+        if (!userIconRef.current) return;
+
+        if (!markerRef.current) {
+          markerRef.current = L.marker([lat, lng], {
+            icon: userIconRef.current,
+            draggable: true,
+            zIndexOffset: 500,
+          }).addTo(map);
+
+          markerRef.current.on("dragstart", () => {
             isDragging.current = true;
             setHoveredStore(null);
           });
-
-          // Drag end listener
-          marker.addListener(
-            "dragend",
-            (e: { latLng: { lat: () => number; lng: () => number } }) => {
-              if (e.latLng) {
-                const newPosition = {
-                  lat: e.latLng.lat(),
-                  lng: e.latLng.lng(),
-                };
-
-                // Set dragging to false after a small delay to prevent
-                // immediate position updates from parent
-                setTimeout(() => {
-                  isDragging.current = false;
-                }, 100);
-
-                // Notify parent component about the location change
-                if (callbacksRef.current.onLocationUpdate) {
-                  callbacksRef.current.onLocationUpdate(newPosition);
-                }
-              }
-            },
-          );
+          markerRef.current.on("dragend", (ev) => {
+            const ll = ev.target.getLatLng();
+            setTimeout(() => {
+              isDragging.current = false;
+            }, 100);
+            if (callbacksRef.current.onLocationUpdate) {
+              callbacksRef.current.onLocationUpdate({ lat: ll.lat, lng: ll.lng });
+            }
+          });
+        } else {
+          markerRef.current.setLatLng([lat, lng]);
         }
-      }, 100);
-    }
 
-    initMap();
-  }, [latLng, theme]);
+        if (callbacksRef.current.onLocationUpdate) {
+          callbacksRef.current.onLocationUpdate(pos);
+        }
+      });
+    })();
+
+    return () => {
+      destroyed = true;
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+      markerRef.current = null;
+      tileLayerRef.current = null;
+      storeMarkersRef.current = [];
+      zoneLayersRef.current = [];
+      setMapReady(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- init once; latLng synced in other effects
+  }, []);
 
   useEffect(() => {
-    if (!mapInstance.current || !stores || !markerLibraryRef.current) return;
+    const map = mapInstanceRef.current;
+    const L = LRef.current;
+    const tiles = tileLayerRef.current;
+    if (!map || !L || !tiles) return;
 
-    const { AdvancedMarkerElement } = markerLibraryRef.current;
+    const lightTiles = TILE_LAYERS[4] ?? TILE_LAYERS[0];
+    const darkTiles = TILE_LAYERS[5] ?? TILE_LAYERS[4] ?? TILE_LAYERS[0];
+    const nextUrl =
+      theme.resolvedTheme === "dark" ? darkTiles : lightTiles;
+    tiles.setUrl(nextUrl);
+  }, [theme.resolvedTheme]);
 
-    // Filter valid stores and get their IDs
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    const L = LRef.current;
+    if (!map || !L || !userIconRef.current) return;
+
+    if (!latLng) return;
+
+    const latLngChanged =
+      !prevLatLngPropRef.current ||
+      Math.abs(prevLatLngPropRef.current.lat - latLng.lat) > 0.00001 ||
+      Math.abs(prevLatLngPropRef.current.lng - latLng.lng) > 0.00001;
+
+    if (!markerRef.current) {
+      markerRef.current = L.marker([latLng.lat, latLng.lng], {
+        icon: userIconRef.current,
+        draggable: true,
+        zIndexOffset: 500,
+      }).addTo(map);
+
+      markerRef.current.on("dragstart", () => {
+        isDragging.current = true;
+        setHoveredStore(null);
+      });
+      markerRef.current.on("dragend", (ev) => {
+        const ll = ev.target.getLatLng();
+        setTimeout(() => {
+          isDragging.current = false;
+        }, 100);
+        if (callbacksRef.current.onLocationUpdate) {
+          callbacksRef.current.onLocationUpdate({ lat: ll.lat, lng: ll.lng });
+        }
+      });
+      map.panTo([latLng.lat, latLng.lng]);
+    } else if (!isDragging.current && latLngChanged) {
+      markerRef.current.setLatLng([latLng.lat, latLng.lng]);
+      const c = map.getCenter();
+      const distanceToCenter =
+        Math.abs(c.lat - latLng.lat) > 0.0001 ||
+        Math.abs(c.lng - latLng.lng) > 0.0001;
+      if (distanceToCenter) {
+        map.panTo([latLng.lat, latLng.lng]);
+      }
+    }
+
+    prevLatLngPropRef.current = latLng;
+  }, [latLng]);
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    const L = LRef.current;
+    const icon = storeIconRef.current;
+    if (!map || !L || !icon || !mapReady) return;
+
     const validStores = stores.filter(
       (s: Store) => s.id && (s.lat || s.latitude),
     );
     const newStoreIds = new Set(validStores.map((s: Store) => s.id));
 
-    // Check if the store IDs or latLng have actually changed to avoid redundant operations
     const currentIds = Array.from(storesIdsRef.current).sort().join(",");
     const incomingIds = Array.from(newStoreIds).sort().join(",");
     const latLngKey = latLng
@@ -331,164 +321,121 @@ function GoogleMap(props: GoogleMapProps) {
     }
     prevLatLngKeyRef.current = latLngKey;
 
-    // Clear existing store markers
-    storeMarkersRef.current.forEach((marker) => {
-      marker.map = null;
+    storeMarkersRef.current.forEach((m) => {
+      m.remove();
     });
+    storeMarkersRef.current = [];
 
-    // Update store data map for reference
     storeDataMapRef.current.clear();
     validStores.forEach((store: Store) => {
       storeDataMapRef.current.set(store.id, store);
     });
 
-    // Create new markers (offset store position when it overlaps current location)
-    const newMarkers = validStores
-      .map((store: any) => {
-        const lat = Number(store.lat || store.latitude);
-        const lng = Number(store.lng || store.longitude);
+    validStores.forEach((store: Store) => {
+      const lat = Number(store.lat || store.latitude);
+      const lng = Number(store.lng || store.longitude);
+      if (Number.isNaN(lat) || Number.isNaN(lng)) return;
 
-        if (isNaN(lat) || isNaN(lng)) return null;
+      const position = getStoreMarkerPosition(lat, lng, latLng);
 
-        const position = getStoreMarkerPosition(lat, lng, latLng);
+      const marker = L.marker([position.lat, position.lng], {
+        icon,
+        zIndexOffset: 400,
+      }).addTo(map);
 
-        // Create custom store icon container
-        const iconContainer = document.createElement("div");
-        iconContainer.style.cssText = `
-          width: 48px;
-          height: 48px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          cursor: pointer;
-          transition: transform 0.2s ease;
-        `;
-
-        // Create img element for custom store icon
-        const img = document.createElement("img");
-        img.src = "/logos/store-icon.png";
-        img.style.cssText = `
-          width: 100%;
-          height: 100%;
-          object-fit: contain;
-        `;
-
-        iconContainer.appendChild(img);
-
-        const marker = new AdvancedMarkerElement({
-          map: mapInstance.current,
-          position,
-          title: store.name || "Store",
-          content: iconContainer,
-        });
-
-        // Add hover listeners
-        if (marker.element) {
-          marker.element.style.cursor = "pointer";
-          marker.element.style.transition = "transform 0.2s ease";
-
-          marker.element.addEventListener("mouseenter", () => {
-            // Scale up on hover for visual feedback
-            iconContainer.style.transform = "scale(1.15)";
-          });
-
-          marker.element.addEventListener("mouseleave", () => {
-            // Scale back to normal
-            iconContainer.style.transform = "scale(1)";
-          });
-
-          // Add click listener for mobile/touch devices to show popup
-          marker.element.addEventListener("click", (e: MouseEvent) => {
-            e.stopPropagation(); // Prevent the click from bubbling to the map
-            isMarkerClickRef.current = true;
-            const storeData = storeDataMapRef.current.get(store.id);
-            if (storeData) {
-              const rect = (
-                e.currentTarget as HTMLElement
-              ).getBoundingClientRect();
-              const mapRect = mapRef.current?.getBoundingClientRect();
-              if (mapRect) {
-                // Position popup centered on the marker
-                setPopupPosition({
-                  x: rect.left - mapRect.left + rect.width / 2,
-                  y: rect.top - mapRect.top + rect.height / 2,
-                });
-                setHoveredStore(storeData);
-              }
-            }
-            // Reset the flag after a short delay to ensure it doesn't interfere with next clicks
-            setTimeout(() => {
-              isMarkerClickRef.current = false;
-            }, 300);
-          });
+      marker.on("click", (e: LeafletMouseEvent) => {
+        L.DomEvent.stopPropagation(e);
+        isMarkerClickRef.current = true;
+        const storeData = storeDataMapRef.current.get(store.id);
+        if (storeData) {
+          const el = marker.getElement();
+          const mapRect = mapRef.current?.getBoundingClientRect();
+          if (el && mapRect) {
+            const rect = el.getBoundingClientRect();
+            setPopupPosition({
+              x: rect.left - mapRect.left + rect.width / 2,
+              y: rect.top - mapRect.top + rect.height / 2,
+            });
+            setHoveredStore(storeData);
+          }
         }
+        setTimeout(() => {
+          isMarkerClickRef.current = false;
+        }, 300);
+      });
 
-        return marker;
-      })
-      .filter((m): m is google.maps.marker.AdvancedMarkerElement => m !== null);
+      const el = marker.getElement();
+      if (el) {
+        el.style.cursor = "pointer";
+      }
 
-    storeMarkersRef.current = newMarkers;
+      storeMarkersRef.current.push(marker);
+    });
+
     storesIdsRef.current = new Set<number>(newStoreIds as Set<number>);
-  }, [stores, latLng, router, map]);
+  }, [stores, latLng, mapReady]);
 
   useEffect(() => {
-    if (!map || !zones) return;
+    const map = mapInstanceRef.current;
+    const L = LRef.current;
+    if (!map || !L || !mapReady) return;
 
-    // Clear existing zone shapes
-    zoneShapesRef.current.forEach((shape) => shape.setMap(null));
-    zoneShapesRef.current = [];
+    zoneLayersRef.current.forEach((layer) => {
+      map.removeLayer(layer);
+    });
+    zoneLayersRef.current = [];
 
-    zones.forEach((zone: any) => {
+    zones.forEach((zone: Record<string, unknown>) => {
       const center = {
-        lat: parseFloat(zone.center_latitude),
-        lng: parseFloat(zone.center_longitude),
+        lat: parseFloat(String(zone.center_latitude)),
+        lng: parseFloat(String(zone.center_longitude)),
       };
 
-      if (zone.boundary_json && zone.boundary_json.length > 0) {
-        // Ensure paths is an array of literals
-        const paths = (
-          Array.isArray(zone.boundary_json)
-            ? zone.boundary_json
-            : JSON.parse(zone.boundary_json)
-        ).map((point: any) => ({
-          lat: Number(point.lat),
-          lng: Number(point.lng),
-        }));
+      let boundary = zone.boundary_json;
+      if (typeof boundary === "string") {
+        try {
+          boundary = JSON.parse(boundary);
+        } catch {
+          boundary = [];
+        }
+      }
 
-        const polygon = new google.maps.Polygon({
-          paths,
-          strokeColor: "#4F46E5",
-          strokeOpacity: 0.8,
-          strokeWeight: 2,
+      if (Array.isArray(boundary) && boundary.length > 0) {
+        const latlngs = boundary.map((point: { lat: unknown; lng: unknown }) => [
+          Number(point.lat),
+          Number(point.lng),
+        ]) as [number, number][];
+
+        const polygon = L.polygon(latlngs, {
+          color: "#4F46E5",
+          weight: 2,
+          opacity: 0.8,
           fillColor: "#4F46E5",
           fillOpacity: 0.35,
-          clickable: false,
-        });
-        polygon.setMap(map);
-        zoneShapesRef.current.push(polygon);
+        }).addTo(map);
+
+        zoneLayersRef.current.push(polygon);
       } else if (zone.radius_km) {
-        const circle = new google.maps.Circle({
-          strokeColor: "#4F46E5",
-          strokeOpacity: 0.8,
-          strokeWeight: 2,
+        const circle = L.circle([center.lat, center.lng], {
+          radius: Number(zone.radius_km) * 1000,
+          color: "#4F46E5",
+          weight: 2,
+          opacity: 0.8,
           fillColor: "#4F46E5",
           fillOpacity: 0.35,
-          center,
-          radius: Number(zone.radius_km) * 1000,
-          clickable: false,
-        });
-        circle.setMap(map);
-        zoneShapesRef.current.push(circle);
+        }).addTo(map);
+
+        zoneLayersRef.current.push(circle);
       }
     });
-  }, [zones, map]);
+  }, [zones, mapReady]);
 
   return (
     <div
       className="relative w-full overflow-hidden rounded-lg"
       style={{ height: `${height}px` }}
     >
-      <div ref={mapRef} className="bg-gray-100 w-full h-full" />
+      <div ref={mapRef} className="bg-gray-100 w-full h-full z-0" />
       {hoveredStore && (
         <StoreMarkerPopup
           store={hoveredStore}

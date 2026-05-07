@@ -2,6 +2,9 @@ import { FC, useEffect, useRef } from "react";
 import { DeliveryZone } from "@/types/ApiResponse";
 import { useTheme } from "next-themes";
 import { useSettings } from "@/contexts/SettingsContext";
+import { TILE_LAYERS } from "@/config/constants";
+
+import "leaflet/dist/leaflet.css";
 
 interface GoogleMapForZoneProps {
   zone: DeliveryZone;
@@ -13,136 +16,144 @@ const GoogleMapForZone: FC<GoogleMapForZoneProps> = ({
   className = "",
 }) => {
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstance = useRef<google.maps.Map | null>(null);
-  const polygonRef = useRef<google.maps.Polygon | null>(null);
-  const centerMarkerRef =
-    useRef<google.maps.marker.AdvancedMarkerElement | null>(null);
+  const mapInstanceRef = useRef<import("leaflet").Map | null>(null);
+  const layersRef = useRef<import("leaflet").Layer[]>([]);
+  const tileLayerRef = useRef<import("leaflet").TileLayer | null>(null);
 
   const theme = useTheme();
-
   const { currencySymbol } = useSettings();
 
   useEffect(() => {
     if (!mapRef.current || !zone) return;
 
-    async function initMap() {
-      try {
-        // Load Maps and Marker libraries
-        const { Map } = (await window.google.maps.importLibrary(
-          "maps"
-        )) as google.maps.MapsLibrary;
-        const { AdvancedMarkerElement } =
-          (await window.google.maps.importLibrary(
-            "marker"
-          )) as google.maps.MarkerLibrary;
-        const { ColorScheme } = (await window.google.maps.importLibrary(
-          "core"
-        )) as google.maps.CoreLibrary;
+    let cancelled = false;
 
-        // Parse center coordinates
-        const center = {
-          lat: parseFloat(zone.center_latitude),
-          lng: parseFloat(zone.center_longitude),
-        };
+    (async () => {
+      const L = (await import("leaflet")).default;
+      if (cancelled || !mapRef.current) return;
 
-        // Initialize the map if not already initialized
-        if (!mapInstance.current) {
-          mapInstance.current = new Map(mapRef.current!, {
-            center,
-            zoom: 13,
-            mapId: "delivery-zone-map",
-            streetViewControl: false,
-            colorScheme:
-              theme.theme === "light" ? ColorScheme.LIGHT : ColorScheme.DARK,
-          });
-        } else {
-          // Update center if map already exists
-          mapInstance.current.setCenter(center);
-        }
+      const centerLat = parseFloat(zone.center_latitude);
+      const centerLng = parseFloat(zone.center_longitude);
 
-        // Clear existing polygon if any
-        if (polygonRef.current) {
-          polygonRef.current.setMap(null);
-        }
+      const lightTiles = TILE_LAYERS[4] ?? TILE_LAYERS[0];
+      const darkTiles = TILE_LAYERS[5] ?? TILE_LAYERS[4] ?? TILE_LAYERS[0];
+      const tileUrl =
+        theme.resolvedTheme === "dark" ? darkTiles : lightTiles;
 
-        // Clear existing center marker if any
-        if (centerMarkerRef.current) {
-          centerMarkerRef.current.map = null;
-        }
-
-        // Create center marker
-        centerMarkerRef.current = new AdvancedMarkerElement({
-          map: mapInstance.current,
-          position: center,
-          title: zone.name,
+      if (!mapInstanceRef.current) {
+        const map = L.map(mapRef.current, {
+          center: [centerLat, centerLng],
+          zoom: 13,
+          zoomControl: true,
         });
+        mapInstanceRef.current = map;
 
-        // Create polygon from boundary points if available
-        if (zone.boundary_json && zone.boundary_json.length > 0) {
-          const paths = zone.boundary_json.map((point) => ({
-            lat: point.lat,
-            lng: point.lng,
-          }));
+        const tiles = L.tileLayer(tileUrl, {
+          maxZoom: 19,
+          attribution:
+            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        }).addTo(map);
+        tileLayerRef.current = tiles;
 
-          polygonRef.current = new google.maps.Polygon({
-            paths,
-            strokeColor: "#4F46E5",
-            strokeOpacity: 0.8,
-            strokeWeight: 2,
-            fillColor: "#4F46E5",
-            fillOpacity: 0.35,
-          });
-
-          polygonRef.current.setMap(mapInstance.current);
-
-          // Fit bounds to show the entire polygon
-          const bounds = new google.maps.LatLngBounds();
-          paths.forEach((path) => bounds.extend(path));
-          mapInstance.current.fitBounds(bounds);
-        } else if (zone.radius_km) {
-          // If no polygon but radius is available, draw a circle
-          const circle = new google.maps.Circle({
-            strokeColor: "#4F46E5",
-            strokeOpacity: 0.8,
-            strokeWeight: 2,
-            fillColor: "#4F46E5",
-            fillOpacity: 0.35,
-            map: mapInstance.current,
-            center,
-            radius: zone.radius_km * 1000, // Convert km to meters
-          });
-
-          // Fit bounds to show the entire circle
-          mapInstance.current.fitBounds(circle.getBounds()!);
+        map.whenReady(() => setTimeout(() => map.invalidateSize(), 100));
+      } else {
+        mapInstanceRef.current.setView([centerLat, centerLng], 13);
+        if (tileLayerRef.current) {
+          tileLayerRef.current.setUrl(tileUrl);
         }
-
-        // Add info window for the zone
-        const infoWindow = new google.maps.InfoWindow({
-          content: `
-            <div class="p-3 min-w-[200px]">
-              <div class="font-semibold text-gray-800 mb-2">${zone.name}</div>
-              <div class="text-sm text-gray-600">
-                <p>Delivery Charges: ${currencySymbol} ${zone.regular_delivery_charges}</p>
-                ${zone.rush_delivery_enabled ? `<p>Rush Delivery: ${currencySymbol} ${zone.rush_delivery_charges}</p>` : ""}
-                ${zone.free_delivery_amount ? `<p>Free Delivery Above: ${currencySymbol} ${zone.free_delivery_amount}</p>` : ""}
-              </div>
-            </div>
-          `,
-        });
-
-        centerMarkerRef.current.addListener("click", () => {
-          infoWindow.open(mapInstance.current, centerMarkerRef.current);
-        });
-
-        // Open info window by default
-        infoWindow.open(mapInstance.current, centerMarkerRef.current);
-      } catch (error) {
-        console.error("Error initializing Google Maps:", error);
       }
-    }
 
-    initMap();
-  }, [zone, theme, currencySymbol]);
+      const map = mapInstanceRef.current;
+      if (!map) return;
+
+      layersRef.current.forEach((layer) => {
+        map.removeLayer(layer);
+      });
+      layersRef.current = [];
+
+      const html = `
+        <div class="p-3 min-w-[200px]">
+          <div class="font-semibold text-gray-800 mb-2">${zone.name}</div>
+          <div class="text-sm text-gray-600">
+            <p>Delivery Charges: ${currencySymbol} ${zone.regular_delivery_charges}</p>
+            ${zone.rush_delivery_enabled ? `<p>Rush Delivery: ${currencySymbol} ${zone.rush_delivery_charges}</p>` : ""}
+            ${zone.free_delivery_amount ? `<p>Free Delivery Above: ${currencySymbol} ${zone.free_delivery_amount}</p>` : ""}
+          </div>
+        </div>
+      `;
+
+      const marker = L.marker([centerLat, centerLng], {
+        title: zone.name,
+      })
+        .bindPopup(html)
+        .addTo(map);
+
+      layersRef.current.push(marker);
+      marker.openPopup();
+
+      let bounds: import("leaflet").LatLngBounds | null = null;
+
+      if (zone.boundary_json && zone.boundary_json.length > 0) {
+        const latlngs = zone.boundary_json.map((point) => [
+          point.lat,
+          point.lng,
+        ]) as [number, number][];
+
+        const polygon = L.polygon(latlngs, {
+          color: "#4F46E5",
+          weight: 2,
+          opacity: 0.8,
+          fillColor: "#4F46E5",
+          fillOpacity: 0.35,
+        }).addTo(map);
+
+        layersRef.current.push(polygon);
+        bounds = polygon.getBounds();
+      } else if (zone.radius_km) {
+        const circle = L.circle([centerLat, centerLng], {
+          radius: zone.radius_km * 1000,
+          color: "#4F46E5",
+          weight: 2,
+          opacity: 0.8,
+          fillColor: "#4F46E5",
+          fillOpacity: 0.35,
+        }).addTo(map);
+
+        layersRef.current.push(circle);
+        bounds = circle.getBounds();
+      }
+
+      if (bounds?.isValid()) {
+        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [zone, theme.resolvedTheme, currencySymbol]);
+
+  useEffect(() => {
+    const tiles = tileLayerRef.current;
+    if (!tiles || !mapInstanceRef.current) return;
+
+    const lightTiles = TILE_LAYERS[4] ?? TILE_LAYERS[0];
+    const darkTiles = TILE_LAYERS[5] ?? TILE_LAYERS[4] ?? TILE_LAYERS[0];
+    const nextUrl =
+      theme.resolvedTheme === "dark" ? darkTiles : lightTiles;
+    tiles.setUrl(nextUrl);
+  }, [theme.resolvedTheme]);
+
+  useEffect(() => {
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+      tileLayerRef.current = null;
+      layersRef.current = [];
+    };
+  }, []);
 
   return (
     <div

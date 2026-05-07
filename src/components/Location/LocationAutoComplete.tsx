@@ -14,9 +14,15 @@ import type {
   LocationAutoCompleteRef,
   PlacePrediction,
   PredictionItem,
-  AutocompleteSuggestionRequest,
   LocationAutoCompleteProps,
 } from "./types/LocationAutoComplete.types";
+import {
+  photonSearch,
+  photonFeatureToLatLng,
+  photonFeatureLabels,
+  photonReverse,
+  addressFieldsFromPhoton,
+} from "@/lib/photon";
 import { useTranslation } from "react-i18next";
 
 // Enhanced props interface to include initial location
@@ -88,10 +94,6 @@ const LocationAutoComplete = forwardRef<
   }, [initialLocation, isInitialized]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || typeof window.google === "undefined") {
-      return;
-    }
-
     // Don't fetch predictions if we're just displaying the initial location
     if (!isInitialized) return;
 
@@ -117,41 +119,32 @@ const LocationAutoComplete = forwardRef<
 
       timeoutId.current = setTimeout(async () => {
         try {
-          const { AutocompleteSuggestion, AutocompleteSessionToken } =
-            (await google.maps.importLibrary(
-              "places"
-            )) as google.maps.PlacesLibrary;
-
-          const token = new AutocompleteSessionToken();
-
-          const request: AutocompleteSuggestionRequest = {
-            input: inputValue,
-            sessionToken: token,
-            includedRegionCodes: allowedCountries,
-          };
-
-          const { suggestions } =
-            await AutocompleteSuggestion.fetchAutocompleteSuggestions(request);
+          const features = await photonSearch(inputValue, {
+            countryCodes:
+              allowedCountries.length > 0 ? allowedCountries : undefined,
+            limit: 10,
+          });
 
           setPredictions(
-            suggestions.map((s) => {
-              // Check if s.placePrediction is not null
-              if (s.placePrediction) {
-                return {
-                  key: s.placePrediction.placeId,
-                  label: s.placePrediction.mainText?.text || "",
-                  description: s.placePrediction.secondaryText?.text || "",
-                  original: s.placePrediction,
-                };
-              } else {
-                return {
-                  key: "",
-                  label: "",
-                  description: "",
-                  original: null,
-                };
-              }
-            })
+            features.map((f) => {
+              const { lat, lng } = photonFeatureToLatLng(f);
+              const { label, description } = photonFeatureLabels(f);
+              const osmId = f.properties.osm_id;
+              const osmType = f.properties.osm_type;
+              const key = `${osmType ?? "place"}-${osmId ?? `${lng.toFixed(5)},${lat.toFixed(5)}`}`;
+              const pred: PlacePrediction = {
+                placeId: key,
+                mainText: { text: label },
+                secondaryText: { text: description },
+              };
+              return {
+                key,
+                label,
+                description,
+                latLng: { lat, lng },
+                original: pred,
+              };
+            }),
           );
         } catch (error) {
           console.error("Error fetching predictions:", error);
@@ -175,31 +168,20 @@ const LocationAutoComplete = forwardRef<
   const handleSelectionChange = async (key: Key | null): Promise<void> => {
     if (key !== null) {
       const selectedItem = predictions.find((item) => item.key === key);
-      if (selectedItem) {
+      if (selectedItem?.latLng) {
         setSelected(selectedItem.original);
-        setHasValidSelection(true); // Mark that we have a valid selection
+        setHasValidSelection(true);
 
-        try {
-          const geocoder = new window.google.maps.Geocoder();
-          const result = await geocoder.geocode({ placeId: selectedItem.key });
-          if (result?.results[0]?.geometry?.location) {
-            const { lat, lng } = result.results[0].geometry.location.toJSON();
+        onLocationSelect({
+          placeName: selectedItem.label,
+          latLng: selectedItem.latLng,
+          placeDescription: selectedItem.description,
+        });
 
-            onLocationSelect({
-              placeName: selectedItem.label,
-              latLng: { lat, lng },
-              placeDescription: selectedItem.description,
-            });
-
-            // Update input to show the selected location
-            const displayText = selectedItem.description
-              ? `${selectedItem.label}, ${selectedItem.description}`
-              : selectedItem.label;
-            setInputValue(displayText);
-          }
-        } catch (error) {
-          console.error("Error fetching geocode:", error);
-        }
+        const displayText = selectedItem.description
+          ? `${selectedItem.label}, ${selectedItem.description}`
+          : selectedItem.label;
+        setInputValue(displayText);
       }
     } else {
       setSelected(null);
@@ -226,23 +208,15 @@ const LocationAutoComplete = forwardRef<
             lng: position.coords.longitude,
           };
           try {
-            const { Geocoder } = (await google.maps.importLibrary(
-              "geocoding"
-            )) as google.maps.GeocodingLibrary;
-            const geocoder = new Geocoder();
-            const result = await geocoder.geocode({ location: latLng });
-
-            let placeName = "Current Location";
-            const placeDescription = ""; // Changed from let to const
-
-            if (result?.results[0]) {
-              placeName = result.results[0].formatted_address;
-            }
+            const feature = await photonReverse(latLng.lat, latLng.lng);
+            const parsed = addressFieldsFromPhoton(feature);
+            const placeName =
+              parsed?.formattedAddress ?? "Current Location";
 
             onLocationSelect({
-              placeName: placeName,
-              latLng: latLng,
-              placeDescription: placeDescription,
+              placeName,
+              latLng,
+              placeDescription: "",
             });
 
             setInputValue(placeName);

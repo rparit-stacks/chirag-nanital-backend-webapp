@@ -25,6 +25,7 @@ import { debounce } from "lodash";
 import { useMemo } from "react";
 import { getDeliveryZones, getStoresByMap } from "@/routes/api";
 import { Store } from "@/types/ApiResponse";
+import { photonReverse, addressFieldsFromPhoton } from "@/lib/photon";
 
 // Define the ref interface (should match LocationAutoComplete)
 interface LocationAutoCompleteRef {
@@ -160,25 +161,6 @@ const LocationSelector = () => {
     }
   };
 
-  // Helper function to wait for Google Maps API to load
-  const waitForGoogleMaps = (timeout = 5000): Promise<boolean> => {
-    return new Promise((resolve) => {
-      const startTime = Date.now();
-
-      const checkGoogleMaps = () => {
-        if (window.google?.maps?.Geocoder) {
-          resolve(true);
-        } else if (Date.now() - startTime > timeout) {
-          resolve(false);
-        } else {
-          setTimeout(checkGoogleMaps, 200);
-        }
-      };
-
-      checkGoogleMaps();
-    });
-  };
-
   const handleMapLocationUpdate = useCallback(
     async (
       latLng: {
@@ -187,49 +169,41 @@ const LocationSelector = () => {
       },
       renderToast: boolean = true,
     ) => {
-      // Wait for Google Maps API to load
-      const isLoaded = await waitForGoogleMaps();
-      if (!isLoaded) {
-        console.warn("Google Maps API failed to load");
-        return;
-      }
-
       setDeliveryCheckLoading(true);
 
       try {
-        const geocoder = new window.google.maps.Geocoder();
-        const result = await geocoder.geocode({ location: latLng });
+        const feature = await photonReverse(latLng.lat, latLng.lng);
+        const parsed = addressFieldsFromPhoton(feature);
+        const placeName =
+          parsed?.formattedAddress ??
+          `${latLng.lat.toFixed(5)}, ${latLng.lng.toFixed(5)}`;
 
-        if (result?.results[0]) {
-          const newLocation = {
-            placeName: result.results[0].formatted_address,
-            latLng: latLng,
-            placeDescription: "",
-          };
+        const newLocation = {
+          placeName,
+          latLng,
+          placeDescription: "",
+        };
 
-          // First update the modal location and autocomplete input
-          setTempSelectedLatLng(latLng);
-          setTempSelectedLocation(newLocation);
+        setTempSelectedLatLng(latLng);
+        setTempSelectedLocation(newLocation);
 
-          if (autocompleteRef.current) {
-            autocompleteRef.current.setInputValue(newLocation.placeName);
+        if (autocompleteRef.current) {
+          autocompleteRef.current.setInputValue(placeName);
+        }
+
+        const res = await handleCheckZone(latLng.lat, latLng.lng);
+
+        if (res) {
+          if (renderToast) {
+            addToast({ title: "Delivery Available", color: "success" });
           }
-
-          // Then check delivery
-          const res = await handleCheckZone(latLng.lat, latLng.lng);
-
-          if (res) {
-            if (renderToast) {
-              addToast({ title: "Delivery Available", color: "success" });
-            }
-          } else {
-            addToast({
-              title: "Delivery Not Available",
-              color: "danger",
-              description:
-                "You can continue browsing or select a different location",
-            });
-          }
+        } else {
+          addToast({
+            title: "Delivery Not Available",
+            color: "danger",
+            description:
+              "You can continue browsing or select a different location",
+          });
         }
       } catch (error) {
         console.error("Error geocoding map location:", error);

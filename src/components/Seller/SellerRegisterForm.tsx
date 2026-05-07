@@ -10,6 +10,7 @@ import {
 import { Upload, CheckCircle, MapPin, FileCheck, User } from "lucide-react";
 import { sellerRegister } from "@/routes/api";
 import { useTranslation } from "react-i18next";
+import { photonReverse, addressFieldsFromPhoton } from "@/lib/photon";
 import LocationAutoComplete from "@/components/Location/LocationAutoComplete";
 import type { LocationAutoCompleteRef } from "@/components/Location/types/LocationAutoComplete.types";
 
@@ -103,55 +104,27 @@ export default function SellerRegisterForm() {
     placeDescription: string;
   }) => {
     try {
-      const geocoder = new window.google.maps.Geocoder();
-      const result = await geocoder.geocode({ location: locationData.latLng });
+      const feature = await photonReverse(
+        locationData.latLng.lat,
+        locationData.latLng.lng,
+      );
+      const parsed = addressFieldsFromPhoton(feature);
 
-      if (result.results && result.results.length > 0) {
-        const place = result.results[0];
-        let city = "";
-        let state = "";
-        let country = "";
-        let zipcode = "";
-        let countryCode = "";
-
-        for (const component of place.address_components) {
-          const componentType = component.types[0];
-
-          switch (componentType) {
-            case "locality":
-              city = component.long_name;
-              break;
-            case "administrative_area_level_1":
-              state = component.long_name;
-              break;
-            case "country":
-              country = component.long_name;
-              countryCode = component.short_name;
-              break;
-            case "postal_code":
-              zipcode = component.long_name;
-              break;
-          }
-        }
-
-        const addressLine1 = place.formatted_address;
-
+      if (parsed) {
         setFormData((prev) => ({
           ...prev,
-          address: addressLine1,
-          city,
-          state,
-          zipcode,
-          country,
-          countryCode: countryCode,
+          address: parsed.formattedAddress,
+          city: parsed.city,
+          state: parsed.state,
+          zipcode: parsed.zipcode,
+          country: parsed.country,
+          countryCode: parsed.countryCode,
           latitude: locationData.latLng.lat.toString(),
           longitude: locationData.latLng.lng.toString(),
         }));
 
         if (locationAutoCompleteRef.current) {
-          locationAutoCompleteRef.current.setInputValue(
-            place.formatted_address
-          );
+          locationAutoCompleteRef.current.setInputValue(parsed.formattedAddress);
         }
       }
     } catch (error) {

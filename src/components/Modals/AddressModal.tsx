@@ -20,6 +20,7 @@ import { addAddress, editAddress } from "@/routes/api";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useTranslation } from "react-i18next";
 import { staticLat, staticLng } from "@/config/constants";
+import { photonReverse, addressFieldsFromPhoton } from "@/lib/photon";
 
 interface AddressModalProps {
   isOpen: boolean;
@@ -100,59 +101,25 @@ const AddressModal: FC<AddressModalProps> = ({
     setLocation(latLng);
 
     try {
-      const geocoder = new window.google.maps.Geocoder();
-      const result = await geocoder.geocode({ location: latLng });
+      const feature = await photonReverse(latLng.lat, latLng.lng);
+      const parsed = addressFieldsFromPhoton(feature);
 
-      if (result.results && result.results.length > 0) {
-        const place = result.results[0];
-        let city = "";
-        let state = "";
-        let country = "";
-        let zipcode = "";
-        let countryCode = "";
-
-        for (const component of place.address_components) {
-          const componentType = component.types[0];
-
-          switch (componentType) {
-            case "locality":
-              city = component.long_name;
-              break;
-            case "administrative_area_level_1":
-              state = component.long_name;
-              break;
-            case "country":
-              country = component.long_name;
-              countryCode = component.short_name;
-              break;
-            case "postal_code":
-              zipcode = component.long_name;
-              break;
-          }
-        }
-
-        const addressLine1 = place.formatted_address;
-        const addressLine2 = "";
-
+      if (parsed) {
         setFormData((prev) => ({
           ...prev,
-          address_line1: addressLine1,
-          address_line2: addressLine2,
-          city,
-          state,
-          zipcode,
-          country,
-          country_code: countryCode,
+          address_line1: parsed.address_line1,
+          address_line2: "",
+          city: parsed.city,
+          state: parsed.state,
+          zipcode: parsed.zipcode,
+          country: parsed.country,
+          country_code: parsed.countryCode,
           landmark: "",
         }));
 
         if (locationAutoCompleteRef.current) {
-          locationAutoCompleteRef.current.setInputValue(
-            place.formatted_address,
-          );
+          locationAutoCompleteRef.current.setInputValue(parsed.formattedAddress);
         }
-      } else {
-        console.log("No geocoding results found.");
       }
     } catch (error) {
       console.error("Geocoding error:", error);

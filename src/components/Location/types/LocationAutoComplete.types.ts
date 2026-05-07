@@ -16,25 +16,13 @@ export interface PlacePrediction {
   secondaryText: SecondaryText | null;
 }
 
-export interface AutocompleteSuggestionResult {
-  placePrediction: PlacePrediction | null;
-}
-
-export interface FetchSuggestionsResponse {
-  suggestions: AutocompleteSuggestionResult[];
-}
-
-export interface AutocompleteSuggestionRequest {
-  input: string;
-  sessionToken: google.maps.places.AutocompleteSessionToken;
-  includedRegionCodes: string[];
-}
-
 export interface PredictionItem {
   key: string;
   label: string;
   description: string;
-  original: PlacePrediction | null; // Use your custom PlacePrediction type
+  original: PlacePrediction | null;
+  /** Present when suggestions come from Photon (direct pick, no extra geocode). */
+  latLng?: { lat: number; lng: number };
 }
 
 export interface LocationAutoCompleteProps {
