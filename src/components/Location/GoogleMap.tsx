@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { GoogleMapProps } from "./types/GoogleMap.types";
 import { useTheme } from "next-themes";
 import StoreMarkerPopup from "./StoreMarkerPopup";
-import { Store } from "@/types/ApiResponse";
+import { Store, DeliveryZone, type BoundaryPoint } from "@/types/ApiResponse";
 import { TILE_LAYERS, staticLat, staticLng } from "@/config/constants";
 import type {
   Map as LeafletMap,
@@ -385,25 +385,31 @@ function GoogleMap(props: GoogleMapProps) {
     });
     zoneLayersRef.current = [];
 
-    zones.forEach((zone: Record<string, unknown>) => {
+    zones.forEach((zone: DeliveryZone) => {
       const center = {
-        lat: parseFloat(String(zone.center_latitude)),
-        lng: parseFloat(String(zone.center_longitude)),
+        lat: parseFloat(zone.center_latitude),
+        lng: parseFloat(zone.center_longitude),
       };
 
-      let boundary = zone.boundary_json;
-      if (typeof boundary === "string") {
+      let points: BoundaryPoint[] = [];
+      const raw = zone.boundary_json as BoundaryPoint[] | string | undefined;
+      if (typeof raw === "string") {
         try {
-          boundary = JSON.parse(boundary);
+          const parsed = JSON.parse(raw) as unknown;
+          if (Array.isArray(parsed)) {
+            points = parsed as BoundaryPoint[];
+          }
         } catch {
-          boundary = [];
+          points = [];
         }
+      } else if (Array.isArray(raw)) {
+        points = raw;
       }
 
-      if (Array.isArray(boundary) && boundary.length > 0) {
-        const latlngs = boundary.map((point: { lat: unknown; lng: unknown }) => [
-          Number(point.lat),
-          Number(point.lng),
+      if (points.length > 0) {
+        const latlngs = points.map((point) => [
+          point.lat,
+          point.lng,
         ]) as [number, number][];
 
         const polygon = L.polygon(latlngs, {
