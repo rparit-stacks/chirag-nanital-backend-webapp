@@ -255,7 +255,7 @@ const LocationAutoComplete = forwardRef<
         items={predictions}
         placeholder={t("enter-city-or-address")}
         variant="faded"
-        // allowsEmptyCollection={inputValue.length == 0}
+        allowsEmptyCollection={false}
         allowsCustomValue={true}
         classNames={{
           base: "group-data-[focus-visible=true]:ring-0 group-data-[focus-visible=true]:outline-none",

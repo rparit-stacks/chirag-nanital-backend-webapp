@@ -4,8 +4,6 @@ import { useTheme } from "next-themes";
 import { useSettings } from "@/contexts/SettingsContext";
 import { TILE_LAYERS } from "@/config/constants";
 
-import "leaflet/dist/leaflet.css";
-
 interface GoogleMapForZoneProps {
   zone: DeliveryZone;
   className?: string;
@@ -55,7 +53,11 @@ const GoogleMapForZone: FC<GoogleMapForZoneProps> = ({
         }).addTo(map);
         tileLayerRef.current = tiles;
 
-        map.whenReady(() => setTimeout(() => map.invalidateSize(), 100));
+        map.whenReady(() => {
+          setTimeout(() => map.invalidateSize(), 100);
+          setTimeout(() => map.invalidateSize(), 400);
+          setTimeout(() => map.invalidateSize(), 900);
+        });
       } else {
         mapInstanceRef.current.setView([centerLat, centerLng], 13);
         if (tileLayerRef.current) {

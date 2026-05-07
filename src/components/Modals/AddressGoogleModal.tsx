@@ -45,7 +45,7 @@ const AddressGoogleModal: FC<AddressGoogleModalProps> = ({
       onOpenChange={onOpenChange}
       size="3xl"
       backdrop="blur"
-      scrollBehavior="inside"
+      scrollBehavior="normal"
     >
       <ModalContent>
         {() => (
@@ -60,10 +60,13 @@ const AddressGoogleModal: FC<AddressGoogleModalProps> = ({
               </div>
             </ModalHeader>
             <ModalBody className="pb-6">
-              <GoogleMap
-                latLng={{ lat: address.latitude, lng: address.longitude }}
-                onLocationUpdate={() => {}} // Read-only mode
-              />
+              <div className="w-full rounded-xl overflow-hidden" style={{ height: 380 }}>
+                <GoogleMap
+                  latLng={{ lat: address.latitude, lng: address.longitude }}
+                  onLocationUpdate={() => {}}
+                  height={380}
+                />
+              </div>
             </ModalBody>
           </>
         )}

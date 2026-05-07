@@ -82,6 +82,7 @@ function GoogleMap(props: GoogleMapProps) {
   const LRef = useRef<typeof import("leaflet") | null>(null);
   const storeIconRef = useRef<ReturnType<typeof createStoreIcon> | null>(null);
   const userIconRef = useRef<ReturnType<typeof createUserIcon> | null>(null);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
   const isDragging = useRef(false);
   const isMarkerClickRef = useRef(false);
@@ -149,11 +150,16 @@ function GoogleMap(props: GoogleMapProps) {
       tileLayerRef.current = tiles;
       mapInstanceRef.current = map;
 
+      // ResizeObserver keeps the map aligned as modal/container animates open
+      if (typeof ResizeObserver !== "undefined" && mapRef.current) {
+        resizeObserverRef.current = new ResizeObserver(() => map.invalidateSize());
+        resizeObserverRef.current.observe(mapRef.current);
+      }
+
       map.whenReady(() => {
-        // Multiple invalidateSize calls to handle modal open animation
         setTimeout(() => map.invalidateSize(), 50);
-        setTimeout(() => map.invalidateSize(), 200);
-        setTimeout(() => map.invalidateSize(), 500);
+        setTimeout(() => map.invalidateSize(), 300);
+        setTimeout(() => map.invalidateSize(), 700);
         if (callbacksRef.current.onMapLoad) callbacksRef.current.onMapLoad();
         setMapReady(true);
       });
@@ -227,6 +233,8 @@ function GoogleMap(props: GoogleMapProps) {
 
     return () => {
       destroyed = true;
+      resizeObserverRef.current?.disconnect();
+      resizeObserverRef.current = null;
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;

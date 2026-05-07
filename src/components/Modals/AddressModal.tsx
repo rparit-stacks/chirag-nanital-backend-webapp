@@ -290,14 +290,14 @@ const AddressModal: FC<AddressModalProps> = ({
       isOpen={isOpen}
       onOpenChange={onOpenChange}
       className="max-w-5xl"
-      scrollBehavior="inside"
+      scrollBehavior="normal"
       isDismissable={!isLoading}
     >
       <ModalContent>
         <ModalHeader>
           {initialData ? t("address.update") : t("address.addNew")}
         </ModalHeader>
-        <ModalBody className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <ModalBody className="grid grid-cols-1 lg:grid-cols-2 gap-6 overflow-y-auto max-h-[75dvh]">
           <div className="">
             <div className="mb-4">
               <LocationAutoComplete
