@@ -6,79 +6,61 @@ import {
   ModalBody,
   ModalFooter,
   Button,
-  Input,
   addToast,
-  InputOtp,
 } from "@heroui/react";
 import { TruckElectric, CheckCircle2 } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useTranslation } from "react-i18next";
 import { useDispatch } from "react-redux";
-import { sendOtp, verifyOtp } from "@/routes/api";
-import { useSettings } from "@/contexts/SettingsContext";
+import { updateUserData } from "@/routes/api";
 import { setUserDataRedux } from "@/lib/redux/slices/authSlice";
 import { getCookie } from "@/lib/cookies";
-import { FirebaseInstance } from "@/lib/firebase";
-import {
-  handleSignUp,
-  handleResendOtp,
-  checkPhoneExists,
-  handlePhoneLogin,
-} from "@/helpers/auth";
-import { ConfirmationResult } from "firebase/auth";
+import { checkPhoneExists } from "@/helpers/auth";
+import { useSettings } from "@/contexts/SettingsContext";
 
 const PhoneInput = dynamic(() => import("@/components/Functional/PhoneInput"), {
   ssr: false,
 });
 
-type Step = "phone" | "otp" | "success";
+type Step = "phone" | "success";
 
 export const CompleteProfileModal: FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [step, setStep] = useState<Step>("phone");
   const [isLoading, setIsLoading] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [rawPhone, setRawPhone] = useState("");
+  const [countryCode, setCountryCode] = useState("");
+  const [countryName, setCountryName] = useState("");
   const [friendsCode, setFriendsCode] = useState("");
-  const [isResendingOtp, setIsResendingOtp] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({ phone: "" });
   const [isCheckingPhone, setIsCheckingPhone] = useState(false);
 
-  const { t } = useTranslation();
   const dispatch = useDispatch();
-  const { authSettings, demoMode } = useSettings();
-
-  const smsGateway =
-    authSettings?.smsGateway ||
-    (authSettings?.firebase ? "firebase" : "custom");
-  const isFirebaseGateway = smsGateway === "firebase";
+  const { demoMode } = useSettings();
 
   useEffect(() => {
-    // Listen for custom event to open this modal
     const handleOpen = () => {
       setIsOpen(true);
       setStep("phone");
-      // Check for friend code in cookie
+      setPhoneNumber("");
+      setRawPhone("");
+      setFieldErrors({ phone: "" });
       const cookieCode = getCookie("friend_code");
       if (cookieCode) setFriendsCode(cookieCode as string);
     };
-
     window.addEventListener("open-complete-profile", handleOpen);
-    return () =>
-      window.removeEventListener("open-complete-profile", handleOpen);
+    return () => window.removeEventListener("open-complete-profile", handleOpen);
   }, []);
 
-  // Debounce hook
-  const useDebounce = <T extends unknown[]>(
-    callback: (...args: T) => void,
-    delay: number,
-  ) => {
+  const useDebounce = <T extends unknown[]>(cb: (...args: T) => void, delay: number) => {
     const timer = useRef<NodeJS.Timeout | null>(null);
     return useCallback(
       (...args: T) => {
         if (timer.current) clearTimeout(timer.current);
-        timer.current = setTimeout(() => callback(...args), delay);
+        timer.current = setTimeout(() => cb(...args), delay);
       },
-      [callback, delay],
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [delay],
     );
   };
 
@@ -88,131 +70,60 @@ export const CompleteProfileModal: FC = () => {
       const newErrors = callback({ phone: "" });
       setFieldErrors(newErrors);
     });
-  }, 1000);
+  }, 800);
 
   const handlePhoneChange = (
-    countryCode: string,
-    phoneNumber: string,
-    dialCode: string,
+    cc: string,
+    phone: string,
+    dial: string,
+    name: string,
   ) => {
-    const formattedNumber = `${dialCode}${phoneNumber}`;
-    setPhoneNumber(formattedNumber);
-    if (phoneNumber.length >= 8) {
-      debouncedPhoneCheck(phoneNumber);
-    } else {
-      setFieldErrors({ phone: "" });
+    const formatted = `${dial}${phone}`;
+    setPhoneNumber(formatted);
+    setRawPhone(phone);
+    setCountryCode(cc);
+    setCountryName(name);
+    setFieldErrors({ phone: "" });
+    if (phone.length >= 8) {
+      debouncedPhoneCheck(phone);
     }
   };
 
-  const handleSendOtp = async () => {
-    if (!phoneNumber || phoneNumber.length < 8) {
-      addToast({
-        title: t("login_modal.errors.invalid_phone_title"),
-        color: "danger",
-      });
+  const handleSave = async () => {
+    if (!phoneNumber || rawPhone.length < 8) {
+      addToast({ title: "Please enter a valid phone number", color: "danger" });
       return;
     }
+    if (fieldErrors.phone) return;
 
     setIsLoading(true);
     try {
-      if (isFirebaseGateway) {
-        const firebaseInstance = window.firebaseInstance as
-          | FirebaseInstance
-          | undefined;
-        if (!firebaseInstance) throw new Error("Firebase not initialized");
-
-        const success = await handleSignUp(phoneNumber, firebaseInstance);
-        if (success) setStep("otp");
-      } else {
-        const res = await sendOtp({ mobile: phoneNumber });
-        if (res.success) {
-          addToast({
-            title: t("signup_toast.otp_sent_title"),
-            color: "success",
-          });
-          setStep("otp");
-        } else {
-          throw new Error(res.message);
-        }
-      }
-    } catch (error: any) {
-      addToast({
-        title: "Error",
-        description: error.message || "Failed to send OTP",
-        color: "danger",
+      const response = await updateUserData({
+        mobile: rawPhone,
+        iso_2: countryCode,
+        country: countryName,
+        friends_code: friendsCode || undefined,
       });
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
-  const handleVerify = async (val: string) => {
-    if (val.length !== 6) return;
-    setIsLoading(true);
-
-    try {
-      let response;
-      if (isFirebaseGateway) {
-        const confirmationResult = window.confirmationResult as
-          | ConfirmationResult
-          | undefined;
-        if (!confirmationResult)
-          throw new Error("Verification session expired");
-
-        const userCredential = await confirmationResult.confirm(val);
-        const idToken = await userCredential.user.getIdToken();
-
-        response = await handlePhoneLogin({
-          idToken,
-          dispatch,
-          friends_code: friendsCode || undefined,
-          renderToast: false,
-        });
-      } else {
-        response = await verifyOtp({
-          mobile: phoneNumber,
-          otp: val,
-          friends_code: friendsCode || undefined,
-        });
-      }
-
-      if (response && response.success) {
-        // Phone is verified. Success!
+      if (response?.success) {
         dispatch(setUserDataRedux(response.data || {}));
         setStep("success");
-        setTimeout(() => setIsOpen(false), 2000);
+        setTimeout(() => setIsOpen(false), 1800);
       } else {
-        throw new Error(response?.message || "Invalid OTP");
+        addToast({
+          title: "Could not save phone number",
+          description: response?.message || "Please try again",
+          color: "danger",
+        });
       }
-    } catch (error: any) {
+    } catch (err: any) {
       addToast({
-        title: "Verification Failed",
-        description: error.message,
+        title: "Error",
+        description: err?.message || "Failed to update profile",
         color: "danger",
       });
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const handleResend = async () => {
-    setIsResendingOtp(true);
-    try {
-      if (isFirebaseGateway) {
-        const firebaseInstance = window.firebaseInstance as
-          | FirebaseInstance
-          | undefined;
-        if (firebaseInstance)
-          await handleResendOtp(phoneNumber, firebaseInstance);
-      } else {
-        await sendOtp({ mobile: phoneNumber });
-      }
-      addToast({
-        title: t("resend_otp_toast.otp_resent_title"),
-        color: "success",
-      });
-    } finally {
-      setIsResendingOtp(false);
     }
   };
 
@@ -225,23 +136,29 @@ export const CompleteProfileModal: FC = () => {
       hideCloseButton={true}
       backdrop="blur"
       placement="center"
+      size="sm"
+      classNames={{ base: "rounded-2xl" }}
     >
       <ModalContent>
-        <ModalHeader className="flex flex-col gap-1">
+        <ModalHeader className="flex flex-col gap-1 border-b border-divider">
           <div className="flex items-center gap-2">
             <TruckElectric className="text-primary" size={24} />
             <span className="font-bold">
-              {step === "phone" && "Finish Your Profile"}
-              {step === "otp" && "Verify Your Number"}
-              {step === "success" && "Profile Completed!"}
+              {step === "phone" ? "One Last Step" : "Profile Completed!"}
             </span>
           </div>
+          {step === "phone" && (
+            <p className="text-xs text-foreground/50 font-normal">
+              Add your phone number to complete your account
+            </p>
+          )}
         </ModalHeader>
+
         <ModalBody className="py-6">
           {step === "phone" && (
             <div className="space-y-4">
               <p className="text-sm text-default-500">
-                Please provide your phone number to continue.
+                Your phone number helps with delivery coordination.
               </p>
               <PhoneInput
                 onPhoneChange={handlePhoneChange}
@@ -251,42 +168,11 @@ export const CompleteProfileModal: FC = () => {
               {(fieldErrors.phone || isCheckingPhone) && (
                 <div className="text-xs text-danger flex items-center gap-2">
                   {isCheckingPhone && (
-                    <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-danger"></div>
+                    <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-danger" />
                   )}
                   {fieldErrors.phone}
                 </div>
               )}
-              <Input
-                label="Friend Code (Optional)"
-                placeholder="Enter referral code if any"
-                value={friendsCode}
-                onValueChange={setFriendsCode}
-                variant="flat"
-              />
-            </div>
-          )}
-
-          {step === "otp" && (
-            <div className="flex flex-col items-center gap-6">
-              <p className="text-sm text-center text-default-500">
-                Enter the 6-digit code sent to <br />
-                <span className="font-bold text-foreground">{phoneNumber}</span>
-              </p>
-              <InputOtp
-                length={6}
-                onValueChange={handleVerify}
-                isDisabled={isLoading}
-                autoFocus
-                variant="bordered"
-              />
-              <Button
-                variant="light"
-                size="sm"
-                onPress={handleResend}
-                isLoading={isResendingOtp}
-              >
-                Resend Code
-              </Button>
             </div>
           )}
 
@@ -296,37 +182,34 @@ export const CompleteProfileModal: FC = () => {
                 <CheckCircle2 className="text-success" size={32} />
               </div>
               <h3 className="text-xl font-bold">You&apos;re all set!</h3>
-              <p className="text-sm text-default-500">Welcome to Hypermart.</p>
+              <p className="text-sm text-default-500">Welcome aboard!</p>
             </div>
           )}
         </ModalBody>
-        <ModalFooter>
-          {step === "phone" && (
+
+        {step === "phone" && (
+          <ModalFooter className="flex flex-col gap-2">
             <Button
               color="primary"
               className="w-full"
               isLoading={isLoading || isCheckingPhone}
-              onPress={handleSendOtp}
+              onPress={handleSave}
               isDisabled={
-                !phoneNumber || phoneNumber.length < 8 || !!fieldErrors.phone
+                !phoneNumber || rawPhone.length < 8 || !!fieldErrors.phone
               }
             >
-              Send OTP
+              Save & Continue
             </Button>
-          )}
-          {step === "otp" && (
-            <div className="flex gap-2 w-full">
-              <Button
-                variant="flat"
-                onPress={() => setStep("phone")}
-                isDisabled={isLoading}
-                className="flex-1"
-              >
-                Edit Number
-              </Button>
-            </div>
-          )}
-        </ModalFooter>
+            <Button
+              variant="light"
+              className="w-full text-default-400 text-sm"
+              isDisabled={isLoading}
+              onPress={() => setIsOpen(false)}
+            >
+              Skip for now
+            </Button>
+          </ModalFooter>
+        )}
       </ModalContent>
     </Modal>
   );
