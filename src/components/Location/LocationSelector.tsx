@@ -397,46 +397,54 @@ const LocationSelector = () => {
       <Modal
         isOpen={isOpen}
         onClose={handleCloseModal}
-        scrollBehavior="inside"
-        isDismissable={selectedLocation ? true : false}
+        scrollBehavior="normal"
+        isDismissable={!!selectedLocation}
         classNames={{
-          base: "w-full",
-          body: "px-2 md:px-4",
-          header: "p-3 sm:p-4",
+          base: "w-full max-h-[95dvh]",
+          body: "px-3 md:px-4 pb-2 gap-3",
+          header: "p-3 sm:p-4 pb-2",
+          footer: "pt-2",
         }}
         size="2xl"
         backdrop="blur"
       >
         <ModalContent>
-          <ModalHeader className="flex justify-between items-center">
-            <span>{t("locationSelector.modalTitle")}</span>
+          <ModalHeader className="flex justify-between items-center border-b border-divider">
+            <div className="flex items-center gap-2">
+              <MapPin className="w-4 h-4 text-primary" />
+              <span className="text-base font-semibold">{t("locationSelector.modalTitle")}</span>
+            </div>
           </ModalHeader>
           <ModalBody>
+            {/* Search bar */}
             <LocationAutoComplete
               onLocationSelect={handleLocationSelect}
               ref={autocompleteRef}
               initialLocation={tempSelectedLocation}
             />
-            <GoogleMap
-              latLng={tempSelectedLatLng}
-              onLocationUpdate={handleMapLocationUpdate}
-              onBoundsChange={isSingleVendor ? undefined : handleBoundsChange}
-              onZoomChange={isSingleVendor ? undefined : handleZoomChange}
-              stores={isSingleVendor ? [] : stores}
-              zones={zones}
-              onMapLoad={() => setMapLoaded(true)}
-              disableRedirect={!selectedLocation}
-            />
+            {/* Map — always rendered, height fixed so it fills nicely */}
+            <div className="w-full rounded-xl overflow-hidden border border-divider" style={{ height: 380 }}>
+              <GoogleMap
+                latLng={tempSelectedLatLng}
+                onLocationUpdate={handleMapLocationUpdate}
+                onBoundsChange={isSingleVendor ? undefined : handleBoundsChange}
+                onZoomChange={isSingleVendor ? undefined : handleZoomChange}
+                height={380}
+                stores={isSingleVendor ? [] : stores}
+                zones={zones}
+                onMapLoad={() => setMapLoaded(true)}
+                disableRedirect={!selectedLocation}
+              />
+            </div>
           </ModalBody>
-          <ModalFooter className="flex items-center flex-col sm:flex-row justify-between">
+          <ModalFooter className="flex items-center flex-col sm:flex-row justify-between border-t border-divider">
             <div className="flex-1">
               {demoMode && (
                 <Alert
                   color="warning"
                   title={
                     systemSettings?.customerLocationDemoModeMessage
-                      ? systemSettings?.customerLocationDemoModeMessage
-                      : "Demo mode is enabled. Location will default automatically."
+                      ?? "Demo mode is enabled. Location will default automatically."
                   }
                   variant="faded"
                   classNames={{
@@ -448,12 +456,12 @@ const LocationSelector = () => {
                 />
               )}
             </div>
-
             <Button
               color="primary"
               onPress={handleConfirmLocation}
               isDisabled={!tempSelectedLocation || deliveryCheckLoading}
               isLoading={deliveryCheckLoading}
+              size="md"
             >
               {deliveryCheckLoading
                 ? t("locationSelector.checking")

@@ -10,6 +10,7 @@ import { NextPageWithLayout } from "@/types";
 import { fontSans, fontMono } from "@/config/fonts";
 import { trackPageView } from "@/lib/analytics";
 import "@/styles/index.css";
+import "leaflet/dist/leaflet.css";
 import { CircleX } from "lucide-react";
 import i18n from "../../i18n";
 

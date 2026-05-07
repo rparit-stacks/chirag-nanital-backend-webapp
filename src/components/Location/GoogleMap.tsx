@@ -12,8 +12,6 @@ import type {
   LeafletMouseEvent,
 } from "leaflet";
 
-import "leaflet/dist/leaflet.css";
-
 const SAME_LOCATION_THRESHOLD = 0.00005;
 const STORE_MARKER_OFFSET = 0.00015;
 
@@ -152,7 +150,10 @@ function GoogleMap(props: GoogleMapProps) {
       mapInstanceRef.current = map;
 
       map.whenReady(() => {
-        setTimeout(() => map.invalidateSize(), 100);
+        // Multiple invalidateSize calls to handle modal open animation
+        setTimeout(() => map.invalidateSize(), 50);
+        setTimeout(() => map.invalidateSize(), 200);
+        setTimeout(() => map.invalidateSize(), 500);
         if (callbacksRef.current.onMapLoad) callbacksRef.current.onMapLoad();
         setMapReady(true);
       });

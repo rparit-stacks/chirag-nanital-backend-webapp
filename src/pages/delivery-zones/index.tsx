@@ -1,6 +1,6 @@
 import { GetServerSideProps } from "next";
 import { getDeliveryZones, getSettings } from "@/routes/api";
-import React from "react";
+import React, { useState, useMemo } from "react";
 import { isSSR } from "@/helpers/getters";
 import MyBreadcrumbs from "@/components/custom/MyBreadcrumbs";
 import PageHeader from "@/components/custom/PageHeader";
@@ -9,14 +9,14 @@ import InfiniteScrollStatus from "@/components/Functional/InfiniteScrollStatus";
 import { useInfiniteData } from "@/hooks/useInfiniteData";
 import { DeliveryZone, PaginatedResponse } from "@/types/ApiResponse";
 import { NextPageWithLayout } from "@/types";
-import { ArrowRight, MapPin } from "lucide-react";
+import { ArrowRight, MapPin, Search, X } from "lucide-react";
 import NoProductsFound from "@/components/NoProductsFound";
 import DeliveryZoneCardSkeleton from "@/components/Skeletons/DeliveryZoneCardSkeleton";
 import DeliveryZoneCard from "@/components/Cards/DeliveryZoneCard";
 import { loadTranslations } from "../../../i18n";
 import PageHead from "@/SEO/PageHead";
 import { useTranslation } from "react-i18next";
-import { Button } from "@heroui/react";
+import { Button, Input } from "@heroui/react";
 import { useRouter } from "next/router";
 
 interface DeliveryZonesPageProps {
@@ -31,6 +31,7 @@ const DeliveryZonesPage: NextPageWithLayout<DeliveryZonesPageProps> = ({
 }) => {
   const { t } = useTranslation();
   const router = useRouter();
+  const [searchQuery, setSearchQuery] = useState("");
 
   const {
     data: zones,
@@ -48,26 +49,31 @@ const DeliveryZonesPage: NextPageWithLayout<DeliveryZonesPageProps> = ({
     extraParams: {},
   });
 
+  // Client-side filter by zone name
+  const filteredZones = useMemo(() => {
+    if (!searchQuery.trim()) return zones;
+    const q = searchQuery.toLowerCase().trim();
+    return zones.filter((z) => z.name?.toLowerCase().includes(q));
+  }, [zones, searchQuery]);
+
   return (
     <>
       <PageHead pageTitle={t("pageTitle.delivery-zones")} />
 
       <div className="min-h-screen">
-        {/* Breadcrumb Navigation */}
         <MyBreadcrumbs
           breadcrumbs={[
             { href: "/delivery-zones", label: t("pageTitle.delivery-zones") },
           ]}
         />
 
-        {/* Hidden refetch button for programmatic refreshing */}
+        {/* Hidden refetch button */}
         <button
           id="refetch-delivery-zones-page"
           className="hidden"
           onClick={() => refetch()}
         />
 
-        {/* Page Header */}
         <PageHeader
           title={t("pages.deliveryZones.title")}
           subtitle={t("pages.deliveryZones.subtitle")}
@@ -76,59 +82,105 @@ const DeliveryZonesPage: NextPageWithLayout<DeliveryZonesPageProps> = ({
           }
         />
 
-        {/* Delivery Zones Grid with Infinite Scroll */}
+        {/* Search bar */}
+        <div className="mb-6 max-w-md">
+          <Input
+            value={searchQuery}
+            onValueChange={setSearchQuery}
+            placeholder={t("pages.deliveryZones.searchPlaceholder") || "Search delivery zones…"}
+            startContent={<Search className="w-4 h-4 text-default-400 shrink-0" />}
+            endContent={
+              searchQuery ? (
+                <button
+                  onClick={() => setSearchQuery("")}
+                  className="p-0.5 rounded-full hover:bg-default-200"
+                >
+                  <X className="w-3.5 h-3.5 text-default-400" />
+                </button>
+              ) : null
+            }
+            variant="faded"
+            radius="lg"
+            size="md"
+            classNames={{
+              inputWrapper: "shadow-none",
+            }}
+          />
+          {searchQuery && (
+            <p className="text-xs text-foreground/50 mt-1 ml-1">
+              {filteredZones.length}{" "}
+              {filteredZones.length === 1 ? "zone" : "zones"} found
+            </p>
+          )}
+        </div>
+
+        {/* Zones Grid */}
         <InfiniteScroll
-          hasMore={hasMore}
+          hasMore={hasMore && !searchQuery}
           isLoading={isLoadingMore}
           onLoadMore={loadMore}
         >
-          <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
             {isLoading
               ? Array.from({ length: PER_PAGE }).map((_, index) => (
                   <DeliveryZoneCardSkeleton key={index} />
                 ))
-              : zones.map((zone) => (
+              : filteredZones.map((zone) => (
                   <DeliveryZoneCard zone={zone} key={zone.id} />
                 ))}
           </div>
 
-          {/* Loading more skeleton */}
-          {isLoadingMore && (
-            <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 mt-6">
-              {Array.from({ length: PER_PAGE }).map((_, index) => (
+          {isLoadingMore && !searchQuery && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 mt-6">
+              {Array.from({ length: 6 }).map((_, index) => (
                 <DeliveryZoneCardSkeleton key={`loading-${index}`} />
               ))}
             </div>
           )}
 
-          {/* Status messages */}
-          {zones.length > 0 ? (
-            <InfiniteScrollStatus
-              entityType="zone"
-              total={total}
-              hasMore={hasMore}
-            />
+          {!isLoading && filteredZones.length === 0 ? (
+            searchQuery ? (
+              <div className="text-center py-16 flex flex-col items-center gap-3">
+                <Search className="w-10 h-10 text-foreground/20" />
+                <p className="text-foreground/50 text-sm">
+                  No zones match &ldquo;{searchQuery}&rdquo;
+                </p>
+                <Button
+                  size="sm"
+                  variant="flat"
+                  onPress={() => setSearchQuery("")}
+                >
+                  Clear search
+                </Button>
+              </div>
+            ) : (
+              <NoProductsFound
+                icon={MapPin}
+                title={t("pages.deliveryZones.noZonesTitle")}
+                description={t("pages.deliveryZones.noZonesDescription")}
+                customActions={
+                  <div className="flex w-full justify-center items-center">
+                    <Button
+                      color="primary"
+                      className="h-8"
+                      variant="solid"
+                      onPress={() => router.push("/")}
+                      endContent={<ArrowRight size={16} />}
+                    >
+                      {t("home_title")}
+                    </Button>
+                  </div>
+                }
+              />
+            )
           ) : (
-            <NoProductsFound
-              icon={MapPin}
-              title={t("pages.deliveryZones.noZonesTitle")}
-              description={t("pages.deliveryZones.noZonesDescription")}
-              customActions={
-                <div className="flex w-full justify-center items-center">
-                  <Button
-                    color="primary"
-                    className="h-8"
-                    variant="solid"
-                    onPress={() => {
-                      router.push("/");
-                    }}
-                    endContent={<ArrowRight size={16} />}
-                  >
-                    {t("home_title")}
-                  </Button>
-                </div>
-              }
-            />
+            !searchQuery && (
+              <InfiniteScrollStatus
+                entityType="zone"
+                total={total}
+                hasMore={hasMore}
+              />
+            )
           )}
         </InfiniteScroll>
       </div>
