@@ -1,14 +1,16 @@
 import { Button, Card, Chip, Divider, Link, addToast } from "@heroui/react";
 import {
   Clock,
+  Minus,
   MoveRight,
+  Plus,
   ShoppingBag,
   Star,
   Store,
   Users,
   Share2,
 } from "lucide-react";
-import { FC, useEffect, useState } from "react";
+import { FC, useEffect, useMemo, useState } from "react";
 import QtyInput from "./QtyInput";
 import AdditionalSection from "./AdditionalSection";
 import { Product, ProductVariant } from "@/types/ApiResponse";
@@ -17,11 +19,17 @@ import {
   makeTabClick,
   handleOfflineAddToCart,
 } from "@/helpers/functionalHelpers";
+import { removeItemFromCart, updateCartItem } from "@/routes/api";
+import { updateCartData } from "@/helpers/updators";
+import {
+  removeOfflineCartItem,
+  updateOfflineCartItemQuantity,
+} from "@/lib/redux/slices/offlineCartSlice";
 import { useSettings } from "@/contexts/SettingsContext";
 import AttributeSelector from "@/components/Functional/AttributeSelector";
 import { useRouter } from "next/router";
 import { useTranslation } from "react-i18next";
-import { useSelector } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { RootState } from "@/lib/redux/store";
 import ProductIndicator from "@/components/Functional/ProductIndicator";
 
@@ -43,15 +51,40 @@ const ProductDetailSection: FC<ProductDetailSectionProps> = ({
     initialProduct?.minimum_order_quantity || 1,
   );
   const [loading, setLoading] = useState({ buyNow: false, add: false });
+  const [isUpdatingQty, setIsUpdatingQty] = useState(false);
   const router = useRouter();
   const { t } = useTranslation();
+  const dispatch = useDispatch();
   const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
+  const cartItems = useSelector(
+    (state: RootState) => state.cart.cartData?.items,
+  );
+  const offlineCartItems = useSelector(
+    (state: RootState) => state.offlineCart.items,
+  );
 
   const [selectedVariant, setSelectedVariant] = useState<ProductVariant | null>(
     null,
   );
 
-  const cartCount = Number(initialProduct.item_count_in_cart) || 0;
+  const cartItem = useMemo(() => {
+    if (!selectedVariant) return null;
+    if (isLoggedIn) {
+      return (
+        cartItems?.find(
+          (item) => item.product_variant_id === selectedVariant.id,
+        ) || null
+      );
+    }
+    return (
+      offlineCartItems?.find(
+        (item) => item.product_variant_id === selectedVariant.id,
+      ) || null
+    );
+  }, [cartItems, offlineCartItems, selectedVariant, isLoggedIn]);
+
+  const inCartQty = Number(cartItem?.quantity) || 0;
+  const cartCount = inCartQty || Number(initialProduct.item_count_in_cart) || 0;
 
   const {
     category = "",
@@ -171,6 +204,72 @@ const ProductDetailSection: FC<ProductDetailSectionProps> = ({
       setLoading({ buyNow: false, add: false });
     }
   };
+
+  const handleCartQtyChange = async (newQty: number) => {
+    if (!selectedVariant || !cartItem) return;
+
+    const minQ = initialProduct.minimum_order_quantity || 1;
+    const maxQ = initialProduct.total_allowed_quantity || 9999;
+    const stockLimit = selectedVariant.stock ?? Number.MAX_SAFE_INTEGER;
+    const clampedMax = Math.min(maxQ, stockLimit);
+
+    if (newQty > 0 && newQty < minQ) {
+      addToast({
+        title: t("min_quantity_error_title"),
+        description: t("min_quantity_error_description", { min: minQ }),
+        color: "danger",
+      });
+      return;
+    }
+    if (newQty > clampedMax) {
+      addToast({
+        title: t("stock_limit_error_title"),
+        description: t("stock_limit_error_description", { stock: clampedMax }),
+        color: "danger",
+      });
+      return;
+    }
+
+    setIsUpdatingQty(true);
+    try {
+      if (!isLoggedIn) {
+        const offlineId = String(cartItem.id);
+        if (newQty <= 0) {
+          dispatch(removeOfflineCartItem(offlineId));
+        } else {
+          dispatch(
+            updateOfflineCartItemQuantity({
+              id: offlineId,
+              quantity: newQty,
+            }),
+          );
+        }
+        return;
+      }
+
+      const onlineId = cartItem.id as number;
+      const res =
+        newQty <= 0
+          ? await removeItemFromCart(onlineId)
+          : await updateCartItem({ cartItemId: onlineId, quantity: newQty });
+
+      if (res.success) {
+        await updateCartData(true, true, 0, true, false);
+        document.getElementById("specific-product-refetch")?.click();
+      } else {
+        addToast({
+          title: t("update_failed_title"),
+          description: res.message || t("update_failed_description"),
+          color: "danger",
+        });
+      }
+    } catch (e) {
+      console.error("Cart qty update failed:", e);
+    } finally {
+      setIsUpdatingQty(false);
+    }
+  };
+
   return (
     <div className="md:px-4 w-full flex flex-col gap-2">
       <div className="flex gap-4 items-center">
@@ -412,7 +511,7 @@ const ProductDetailSection: FC<ProductDetailSectionProps> = ({
       <div className="flex flex-col gap-6">
         <div className="flex flex-col gap-2">
           <div className="w-full flex justify-between max-w-md items-center">
-            {!isOutOfStock ? (
+            {!isOutOfStock && inCartQty === 0 ? (
               <>
                 <div className="flex items-center gap-4 w-full">
                   <label htmlFor="qty-input" className="font-medium">
@@ -497,6 +596,53 @@ const ProductDetailSection: FC<ProductDetailSectionProps> = ({
               </div>
             </div>
           </Card>
+        ) : inCartQty > 0 ? (
+          // Already in cart - Show qty controls + Buy Now
+          <div className="flex justify-between items-center max-w-md gap-4">
+            <div className="flex items-center justify-between gap-2 flex-1 border border-default-200 rounded-medium px-2 py-1">
+              <Button
+                isIconOnly
+                size="sm"
+                variant="flat"
+                color="primary"
+                onPress={() =>
+                  handleCartQtyChange(
+                    inCartQty - (initialProduct.quantity_step_size || 1),
+                  )
+                }
+                isDisabled={isUpdatingQty}
+                aria-label={t("decrease_quantity")}
+              >
+                <Minus size={16} />
+              </Button>
+              <span className="font-semibold text-sm">
+                {inCartQty} {t("product_modal.in_cart")}
+              </span>
+              <Button
+                isIconOnly
+                size="sm"
+                variant="flat"
+                color="primary"
+                onPress={() =>
+                  handleCartQtyChange(
+                    inCartQty + (initialProduct.quantity_step_size || 1),
+                  )
+                }
+                isDisabled={isUpdatingQty}
+                aria-label={t("increase_quantity")}
+              >
+                <Plus size={16} />
+              </Button>
+            </div>
+            <Button
+              endContent={<MoveRight className="w-4 h-4" />}
+              color="secondary"
+              fullWidth
+              onPress={() => router.push("/cart")}
+            >
+              {t("buyNow")}
+            </Button>
+          </div>
         ) : (
           // Store is OPEN - Show normal buttons
           <div className="flex justify-between items-center max-w-md gap-4">

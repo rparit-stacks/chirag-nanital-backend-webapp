@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useMemo, useEffect } from "react";
-import { Button, Input } from "@heroui/react";
-import { ClipboardPenLine, Search } from "lucide-react";
+import { Input } from "@heroui/react";
+import { Search } from "lucide-react";
 import { useDisclosure } from "@heroui/react";
 import useSWR from "swr";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -227,21 +227,6 @@ const GlobalSearchBar: React.FC = () => {
         <Input
           as={"div"}
           startContent={<Search className="w-4 h-4 text-gray-400" />}
-          endContent={
-            <Button
-              title={t("userLayout.shoppingList")}
-              onPress={() => {
-                router.push("/shopping-list");
-              }}
-              isIconOnly
-              className="p-0 bg-transparent"
-            >
-              <ClipboardPenLine
-                size={20}
-                className="bg-transparent text-foreground/50"
-              />
-            </Button>
-          }
           onClick={onOpen}
           readOnly
           className="cursor-pointer"

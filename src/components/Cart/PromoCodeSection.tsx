@@ -3,7 +3,6 @@ import {
   Card,
   CardBody,
   CardHeader,
-  Input,
   Button,
   addToast,
   useDisclosure,
@@ -19,7 +18,6 @@ import PromoCodeModal from "../Modals/PromoCodeModal";
 import { useTranslation } from "react-i18next";
 
 const PromoCodeSection: FC = () => {
-  const [code, setCode] = useState("");
   const [isApplying, setIsApplying] = useState(false);
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
   const dispatch = useDispatch();
@@ -30,57 +28,8 @@ const PromoCodeSection: FC = () => {
     (state: RootState) => state.checkout
   );
 
-  const handleApplyPromoCode = async () => {
-    if (!code.trim()) {
-      addToast({
-        title: "Please enter a promo code",
-        color: "warning",
-      });
-      return;
-    }
-
-    setIsApplying(true);
-    try {
-      const response = await validatePromoCode({
-        cart_amount: cartData?.payment_summary.items_total,
-        promo_code: code,
-        delivery_charge: cartData?.payment_summary.delivery_charges,
-      });
-
-      if (response.success) {
-        dispatch(setPromoCode(code));
-        // The actual discount amount would come from the API response
-        // For now, we'll just set it to a placeholder value
-
-        addToast({
-          title: "Promo code applied successfully",
-          color: "success",
-        });
-
-        // Update cart data with the applied promo code
-        updateCartData(true, false);
-      } else {
-        addToast({
-          title: "Invalid promo code",
-          description: response.message || "This promo code cannot be applied",
-          color: "danger",
-        });
-      }
-    } catch (error) {
-      console.error("Error applying promo code:", error);
-      addToast({
-        title: "Error",
-        description: "Failed to apply promo code. Please try again.",
-        color: "danger",
-      });
-    } finally {
-      setIsApplying(false);
-    }
-  };
-
   const handleRemovePromoCode = () => {
     dispatch(setPromoCode(""));
-    setCode("");
     updateCartData(true, false);
     addToast({
       title: t("promoCode.removed"),
@@ -146,41 +95,18 @@ const PromoCodeSection: FC = () => {
               </Button>
             </div>
           ) : (
-            <div className="flex gap-2">
-              <Input
-                placeholder="Enter promo code"
-                value={code}
-                onValueChange={setCode}
-                size="sm"
-                className="flex-1 pr-0"
-                classNames={{
-                  inputWrapper: "pr-0",
-                }}
-                isDisabled={isLoading || isApplying}
-                endContent={
-                  <Button
-                    color="primary"
-                    variant="light"
-                    size="sm"
-                    className="text-xs"
-                    onPress={onOpen}
-                    isDisabled={isApplying}
-                  >
-                    {t("view_all")}
-                  </Button>
-                }
-              />
-              <Button
-                color="primary"
-                size="sm"
-                className="text-xs"
-                onPress={handleApplyPromoCode}
-                isLoading={isApplying}
-                isDisabled={isLoading || !code.trim()}
-              >
-                {t("apply")}
-              </Button>
-            </div>
+            <Button
+              color="primary"
+              variant="flat"
+              size="sm"
+              className="text-xs w-full"
+              onPress={onOpen}
+              isLoading={isApplying}
+              isDisabled={isLoading}
+              startContent={<Ticket className="w-4 h-4" />}
+            >
+              {t("view_all")}
+            </Button>
           )}
         </CardBody>
       </Card>

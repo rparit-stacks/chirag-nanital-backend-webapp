@@ -106,7 +106,7 @@ export const Navbar: FC = () => {
   ];
   return (
     <>
-      <div className="w-full flex flex-col items-start shadow-sm">
+      <div className="w-full flex flex-col items-start shadow-sm sticky top-0 z-40 bg-background">
         {demoMode && showDemoWarning && (
           <div className="w-full bg-primary-50 dark:bg-content1 text-warning-700 text-xs sm:text-sm px-3 py-1 flex items-center justify-center gap-2 relative">
             ℹ️
@@ -132,7 +132,7 @@ export const Navbar: FC = () => {
 
         <HeroUINavbar
           maxWidth="2xl"
-          position="sticky"
+          position="static"
           className="p-0"
           classNames={{ wrapper: "p-0 px-2 md:px-4", base: "shadow-none" }}
           isMenuOpen={isMenuOpen}

@@ -1,4 +1,4 @@
-import { FC, useState } from "react";
+import { FC, useEffect, useRef, useState } from "react";
 import {
   Modal,
   ModalContent,
@@ -31,6 +31,39 @@ const PaymentModal: FC<PaymentModalProps> = ({ open, onOpenChange }) => {
   const router = useRouter();
   const { t } = useTranslation();
   const dispatch = useDispatch();
+  const pushedStateRef = useRef(false);
+
+  // Sync modal state with browser history so the back button just closes the
+  // modal (rather than navigating /cart -> previous page) and doesn't trap the
+  // user in a forward/back loop into the modal.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    if (open && !pushedStateRef.current) {
+      window.history.pushState(
+        { paymentModalOpen: true },
+        "",
+        window.location.href,
+      );
+      pushedStateRef.current = true;
+
+      const handlePopState = () => {
+        pushedStateRef.current = false;
+        onOpenChange(false);
+      };
+      window.addEventListener("popstate", handlePopState);
+      return () => {
+        window.removeEventListener("popstate", handlePopState);
+      };
+    }
+
+    if (!open && pushedStateRef.current) {
+      pushedStateRef.current = false;
+      if (window.history.state?.paymentModalOpen) {
+        window.history.back();
+      }
+    }
+  }, [open, onOpenChange]);
 
   const handleContinue = async () => {
     if (!selectedPayment) {
